@@ -1,0 +1,35 @@
+{
+  "name": "@replbridge/cli",
+  "version": "0.1.0",
+  "description": "ReplBridge CLI — initialize ReplBridge inside any Replit project.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "replbridge": "dist/index.js",
+    "replbridge-init": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/prompts": "^2.4.9",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5"
+  },
+  "author": "Alex Santos",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "claude",
+    "replit",
+    "cli",
+    "installer"
+  ]
+}

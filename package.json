@@ -1,0 +1,34 @@
+{
+  "name": "replbridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude-to-Replit MCP bridge with a secure workspace agent.",
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:agent": "npm run dev --workspace=packages/workspace-agent",
+    "dev:mcp": "npm run dev --workspace=packages/mcp-server"
+  },
+  "workspaces": [
+    "packages/workspace-agent",
+    "packages/mcp-server",
+    "packages/cli",
+    "packages/shared"
+  ],
+  "keywords": [
+    "mcp",
+    "claude",
+    "replit",
+    "agent",
+    "workspace",
+    "developer-tools",
+    "ai-coding"
+  ],
+  "author": "Alex Santos",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

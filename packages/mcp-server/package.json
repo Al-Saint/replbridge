@@ -1,0 +1,36 @@
+{
+  "name": "@replbridge/mcp-server",
+  "version": "0.1.0",
+  "description": "ReplBridge MCP server — connects Claude to the ReplBridge Workspace Agent running inside a Replit project.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "replbridge-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "replit",
+    "agent",
+    "developer-tools",
+    "ai-coding"
+  ],
+  "author": "Alex Santos",
+  "license": "MIT"
+}
