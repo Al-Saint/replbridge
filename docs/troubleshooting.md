@@ -47,3 +47,27 @@ npx @replbridge/init doctor
 ```
 
 This checks your entire setup and tells you exactly what's wrong.
+
+
+## Replit port mapping / public URL unreachable
+
+If `curl https://<your-agent>.replit.app/health` times out or returns a Replit landing page instead of `{ "ok": true }`, the Workspace Agent is running but Replit isn't routing traffic to it. Check:
+
+1. **Bind to `0.0.0.0`, not `127.0.0.1`.** The agent must listen on `0.0.0.0` so Replit's edge can reach it. Verify `packages/workspace-agent/src/index.ts` passes `0.0.0.0` as the host.
+2. 2. **Match the Replit `[[ports]]` mapping.** In `.replit`, the `localPort` must equal the port the agent listens on (default `3001`). The `externalPort` should be `80` (or `443`) so the public URL resolves without a custom port.
+   3. 3. **Use the stable `.replit.app` domain.** The `.replit.dev` preview URL only works while the editor tab is open. For Claude Desktop, always use the deployed `.replit.app` URL.
+      4. 4. **Don't run two servers on the same port.** If you see `EADDRINUSE`, another Repl process (or a leftover dev server) is holding the port. Stop it or change `REPLBRIDGE_AGENT_PORT`.
+         5. 5. **Keep the Repl awake.** Free Repls sleep after inactivity; the first request after a sleep may time out. Upgrade to Always-On or keep the tab open while testing.
+           
+            6. Quick diagnosis:
+           
+            7. ```bash
+               # From the Replit shell — should print "ok"
+               curl -s http://localhost:3001/health | jq -r .ok
+
+               # From your laptop — should also print "ok"
+               curl -s https://<your-agent>.replit.app/health | jq -r .ok
+               ```
+
+               If the first works but the second doesn't, the problem is port mapping, not the agent.
+               
