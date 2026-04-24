@@ -7,107 +7,129 @@
  */
 
 export interface AgentConfig {
-  agentUrl: string;
-  projectToken: string;
+    agentUrl: string;
+    projectToken: string;
 }
 
 export interface AgentResponse<T = unknown> {
-  ok: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
+    ok: boolean;
+    data?: T;
+    error?: {
+      code: string;
+      message: string;
+    };
 }
 
+/** Default request timeout in milliseconds (overridable via REPLBRIDGE_TIMEOUT_MS). */
+const DEFAULT_TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = (() => {
+    const raw = process.env.REPLBRIDGE_TIMEOUT_MS;
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+})();
+
 export class AgentClient {
-  private baseUrl: string;
-  private headers: Record<string, string>;
+    private baseUrl: string;
+    private headers: Record<string, string>;
 
   constructor(config: AgentConfig) {
-    this.baseUrl = config.agentUrl.replace(/\/$/, "");
-    this.headers = {
-      Authorization: `Bearer ${config.projectToken}`,
-      "Content-Type": "application/json",
-    };
+        this.baseUrl = config.agentUrl.replace(/\/$/, "");
+        this.headers = {
+                Authorization: `Bearer ${config.projectToken}`,
+                "Content-Type": "application/json",
+        };
   }
 
   private async request<T>(
-    method: "GET" | "POST",
-    path: string,
-    body?: unknown
-  ): Promise<AgentResponse<T>> {
-    const url = `${this.baseUrl}${path}`;
+        method: "GET" | "POST",
+        path: string,
+        body?: unknown
+      ): Promise<AgentResponse<T>> {
+        const url = `${this.baseUrl}${path}`;
 
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: this.headers,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
+      // Abort the request if the agent doesn't respond within TIMEOUT_MS.
+      // Without this, Claude Desktop hangs indefinitely when the agent is unreachable.
+      const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-      const json = (await res.json()) as AgentResponse<T>;
-      return json;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        ok: false,
-        error: {
-          code: "AGENT_UNREACHABLE",
-          message: `Could not reach the Workspace Agent at ${this.baseUrl}: ${message}`,
-        },
-      };
-    }
+      try {
+              const res = await fetch(url, {
+                        method,
+                        headers: this.headers,
+                        signal: controller.signal,
+                        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+              });
+
+          const json = (await res.json()) as AgentResponse<T>;
+              return json;
+      } catch (err) {
+              const isAbort =
+                        (err instanceof Error && err.name === "AbortError") ||
+                        (err as { code?: string })?.code === "ABORT_ERR";
+              const message =
+                        err instanceof Error ? err.message : String(err);
+              return {
+                        ok: false,
+                        error: {
+                                    code: isAbort ? "AGENT_TIMEOUT" : "AGENT_UNREACHABLE",
+                                    message: isAbort
+                                      ? `Workspace Agent at ${this.baseUrl} did not respond within ${TIMEOUT_MS}ms.`
+                                                  : `Could not reach the Workspace Agent at ${this.baseUrl}: ${message}`,
+                        },
+              };
+      } finally {
+              clearTimeout(timer);
+      }
   }
 
-  // ─── Health ───────────────────────────────────────────────────────────────
+  // ─── Health ─────────────────────────────────────────────────────────────────
 
   async health() {
-    return this.request("GET", "/health");
+        return this.request("GET", "/health");
   }
 
-  // ─── Workspace status ─────────────────────────────────────────────────────
+  // ─── Workspace status ───────────────────────────────────────────────────────
 
-  async workspaceStatus() {
-    return this.request("GET", "/status");
+  async status() {
+        return this.request("GET", "/status");
   }
 
-  // ─── Files ────────────────────────────────────────────────────────────────
+  // ─── Files ──────────────────────────────────────────────────────────────────
 
-  async listFiles(path: string, depth: number) {
-    return this.request("POST", "/files/list", { path, depth });
+  async listFiles(path: string, depth?: number) {
+        return this.request("POST", "/files/list", { path, depth });
   }
 
   async readFile(path: string) {
-    return this.request("POST", "/files/read", { path });
+        return this.request("POST", "/files/read", { path });
   }
 
-  async writeFile(path: string, content: string) {
-    return this.request("POST", "/files/write", { path, content });
+  async writeFile(path: string, contents: string) {
+        return this.request("POST", "/files/write", { path, contents });
   }
 
   async softDeleteFile(path: string) {
-    return this.request("POST", "/files/delete-soft", { path });
+        return this.request("POST", "/files/delete-soft", { path });
   }
 
-  // ─── Commands ─────────────────────────────────────────────────────────────
+  // ─── Commands ───────────────────────────────────────────────────────────────
 
   async listAllowedCommands() {
-    return this.request("GET", "/commands/allowed");
+        return this.request("GET", "/commands/allowed");
   }
 
   async runCommand(command: string) {
-    return this.request("POST", "/commands/run", { command });
+        return this.request("POST", "/commands/run", { command });
   }
 
-  // ─── Git ──────────────────────────────────────────────────────────────────
+  // ─── Git ────────────────────────────────────────────────────────────────────
 
   async gitStatus() {
-    return this.request("GET", "/git/status");
+        return this.request("GET", "/git/status");
   }
 
   async gitDiff() {
-    return this.request("GET", "/git/diff");
+        return this.request("GET", "/git/diff");
   }
 }
 
@@ -117,11 +139,8 @@ export class AgentClient {
  * On failure, returns a clear error message.
  */
 export function formatAgentResponse(response: AgentResponse): string {
-  if (response.ok) {
-    return JSON.stringify(response.data, null, 2);
-  }
-
-  const code = response.error?.code ?? "UNKNOWN_ERROR";
-  const message = response.error?.message ?? "An unexpected error occurred.";
-  return `Error [${code}]: ${message}`;
+    if (response.ok) {
+          return JSON.stringify(response.data, null, 2);
+    }
+    return `Error [${response.error?.code ?? "UNKNOWN"}]: ${response.error?.message ?? "Unknown error"}`;
 }
