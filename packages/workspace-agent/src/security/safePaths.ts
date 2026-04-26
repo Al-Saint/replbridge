@@ -54,6 +54,17 @@ export const MAX_READ_BYTES = 500 * 1024;
  * resolve to /etc/passwd on the host. path.resolve() collapses all the ..
  * segments, then we check that the result still starts with our root.
  *
+ * The prefix check appends path.sep (forward slash on POSIX, backslash on
+ * Windows) before comparing. Without it, a check like
+ * `resolved.startsWith(workspaceRoot)` would falsely accept sibling
+ * directories whose names share a prefix with the root — e.g. workspace
+ * root "/home/runner/workspace/foo" would let
+ * "/home/runner/workspace/foobar/secret" through, because "foobar" starts
+ * with "foo". This is the same class of bug as matching "/etc" and
+ * accidentally letting "/etcd" through. The explicit `=== workspaceRoot`
+ * check exists so the root itself (which has no trailing separator) is
+ * still accepted.
+ *
  * NOTE: This is a lexical check only. For operations that touch the
  * filesystem, prefer resolveSafeRealPath() to also guard against symlink
  * escapes (e.g. a symlink inside the workspace that points to /etc).
@@ -87,6 +98,12 @@ export function resolveWorkspacePath(
  * If the path does not yet exist on disk (e.g. a write to a new file), we
  * fall back to realpath-ing the nearest existing ancestor so that symlinked
  * parent directories are still detected.
+ *
+ * The containment check uses `rootReal + path.sep` rather than a bare
+ * `startsWith(rootReal)` for the same reason as resolveWorkspacePath: a
+ * naive prefix match would let sibling paths like "<root>bar/..." escape
+ * when the root is "<root>" — the "/foo vs /foobar" (or "/etc vs /etcd")
+ * class of bug. The `full !== rootReal` clause keeps the root itself valid.
  */
 export function resolveSafeRealPath(
     workspaceRoot: string,
