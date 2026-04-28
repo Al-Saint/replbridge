@@ -251,7 +251,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       // ── workspace_status ─────────────────────────────────────────────────
       case "workspace_status": {
-        const response = await agent.workspaceStatus();
+        const response = await agent.status();
         return { content: [{ type: "text", text: formatAgentResponse(response) }] };
       }
 
