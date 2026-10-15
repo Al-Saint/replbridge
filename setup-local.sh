@@ -5,9 +5,8 @@
 # Run this once after cloning or unzipping the repo.
 # Installs all dependencies and builds the MCP server.
 #
-# Teaching note: We build the MCP server here because Claude Desktop needs
-# the compiled JS (dist/index.js). The workspace agent runs via tsx in Replit
-# so it doesn't need a build step locally.
+# Teaching note: We build here because MCP clients run the compiled JS
+# (packages/mcp-server/dist/index.js), not the TypeScript sources.
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -e
@@ -19,9 +18,8 @@ echo "════════════════════════�
 echo ""
 
 # ── Check Node version ────────────────────────────────────────────────────────
-NODE_MAJOR=$(node -e "process.stdout.write(process.version.slice(1).split('.')[0])")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "  ERROR: Node.js ≥18 required. You have $(node --version)."
+if ! node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>20||(a===20&&b>=12)?0:1)"; then
+  echo "  ERROR: Node.js ≥20.12 required. You have $(node --version)."
   echo "  Install from https://nodejs.org"
   exit 1
 fi
@@ -32,19 +30,11 @@ echo "  Installing dependencies (this takes ~30s)..."
 npm install
 echo "  ✓ Dependencies installed"
 
-# ── Build MCP server ──────────────────────────────────────────────────────────
-echo "  Building MCP server..."
-cd packages/mcp-server
-npm run build
-cd ../..
+# ── Build all packages ────────────────────────────────────────────────────────
+echo "  Building packages..."
+npm run build --silent
 echo "  ✓ MCP server built → packages/mcp-server/dist/index.js"
-
-# ── Build CLI ─────────────────────────────────────────────────────────────────
-echo "  Building CLI..."
-cd packages/cli
-npm run build
-cd ../..
-echo "  ✓ CLI built → packages/cli/dist/index.js"
+echo "  ✓ CLI built        → packages/cli/dist/index.js"
 
 # ── Configure MCP server .env ─────────────────────────────────────────────────
 MCP_ENV="packages/mcp-server/.env"
@@ -52,7 +42,7 @@ if [ ! -f "$MCP_ENV" ]; then
   cp packages/mcp-server/.env.example "$MCP_ENV"
   echo ""
   echo "  ⚠  Created packages/mcp-server/.env from .env.example"
-  echo "  Edit it with your Replit agent URL and project token before connecting Claude Desktop."
+  echo "  Edit it with your agent URL and project token (or use the env block below)."
 fi
 
 # ── Print next steps ──────────────────────────────────────────────────────────
@@ -63,14 +53,19 @@ echo "════════════════════════�
 echo "  Setup complete. Next steps:"
 echo "════════════════════════════════════════════════════════════"
 echo ""
-echo "  1. Deploy packages/workspace-agent/ to a Replit project"
-echo "     and set REPLBRIDGE_PROJECT_TOKEN + REPLBRIDGE_WORKSPACE_ROOT"
-echo "     in Replit Secrets."
+echo "  1. Copy packages/workspace-agent/ into a replbridge-agent/ folder in your"
+echo "     Repl, set REPLBRIDGE_PROJECT_TOKEN + REPLBRIDGE_WORKSPACE_ROOT in Replit"
+echo "     Secrets, then in the Replit Shell:"
+echo "       cd replbridge-agent && npm install && npm run build && npm start"
 echo ""
-echo "  2. Edit packages/mcp-server/.env with your agent URL + token."
+echo "  2a. Claude Code:"
 echo ""
-echo "  3. Add this to your Claude Desktop config"
-echo "     (~/Library/Application Support/Claude/claude_desktop_config.json):"
+echo "     claude mcp add replbridge \\"
+echo "       -e REPLBRIDGE_AGENT_URL=https://<your-repl-dev-url> \\"
+echo "       -e REPLBRIDGE_PROJECT_TOKEN=<your-token> \\"
+echo "       -- node ${MCP_PATH}"
+echo ""
+echo "  2b. Claude Desktop — add to claude_desktop_config.json:"
 echo ""
 echo '     {'
 echo '       "mcpServers": {'
@@ -78,16 +73,16 @@ echo '         "replbridge": {'
 echo '           "command": "node",'
 echo "           \"args\": [\"${MCP_PATH}\"],"
 echo '           "env": {'
-echo '             "REPLBRIDGE_AGENT_URL": "https://your-agent.replit.app",'
-echo '             "REPLBRIDGE_PROJECT_TOKEN": "your-token-here"'
+echo '             "REPLBRIDGE_AGENT_URL": "https://<your-repl-dev-url>",'
+echo '             "REPLBRIDGE_PROJECT_TOKEN": "<your-token>"'
 echo '           }'
 echo '         }'
 echo '       }'
 echo '     }'
 echo ""
-echo "  4. Restart Claude Desktop."
+echo "  3. Verify:  REPLBRIDGE_AGENT_URL=... REPLBRIDGE_PROJECT_TOKEN=... npm run doctor"
 echo ""
-echo "  5. Test: 'Use ReplBridge to check the workspace status.'"
+echo "  4. Ask Claude: 'Use ReplBridge to check the workspace status.'"
 echo ""
 echo "  Full guide: docs/getting-started.md"
 echo ""

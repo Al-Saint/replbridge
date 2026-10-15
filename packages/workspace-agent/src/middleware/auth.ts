@@ -1,27 +1,22 @@
 import { Request, Response, NextFunction } from "express";
-import { timingSafeEqual } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
+import { PROJECT_TOKEN } from "../config.js";
 import { fail } from "../utils/respond.js";
 
 /**
  * Bearer token authentication middleware.
  *
- * Reads REPLBRIDGE_PROJECT_TOKEN from the environment at startup.
  * Every protected route must pass Authorization: Bearer <token>.
  *
  * Teaching note: We use a constant-time comparison to prevent timing attacks.
  * A naive string comparison (a === b) can leak information about how many
  * characters matched — an attacker can measure response time to brute-force
- * the token one character at a time. timingSafeEqual prevents this.
+ * the token one character at a time. timingSafeEqual prevents this. We hash
+ * both sides first so the buffers are always the same length and the token's
+ * length isn't leaked either.
  */
 
-const PROJECT_TOKEN = process.env.REPLBRIDGE_PROJECT_TOKEN;
-
-if (!PROJECT_TOKEN) {
-  process.stderr.write(
-    "[ReplBridge] FATAL: REPLBRIDGE_PROJECT_TOKEN is not set. Exiting.\n"
-  );
-  process.exit(1);
-}
+const expectedDigest = createHash("sha256").update(PROJECT_TOKEN).digest();
 
 export function requireAuth(
   req: Request,
@@ -35,19 +30,10 @@ export function requireAuth(
     return;
   }
 
-  const token = authHeader.slice("Bearer ".length);
+  const token = authHeader.slice("Bearer ".length).trim();
+  const actualDigest = createHash("sha256").update(token).digest();
 
-  // Constant-time comparison to prevent timing attacks
-  let isValid = false;
-  try {
-    const a = Buffer.from(token);
-    const b = Buffer.from(PROJECT_TOKEN!);
-    isValid = a.length === b.length && timingSafeEqual(a, b);
-  } catch {
-    isValid = false;
-  }
-
-  if (!isValid) {
+  if (!timingSafeEqual(actualDigest, expectedDigest)) {
     fail(res, "UNAUTHORIZED", "Invalid token.", 401);
     return;
   }

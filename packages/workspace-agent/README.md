@@ -1,75 +1,78 @@
 # @replbridge/workspace-agent
 
-The ReplBridge Workspace Agent runs **inside** a Replit project. It is the only component that touches your files. Everything it exposes to Claude is explicitly controlled — no shell, no secrets, no path traversal.
+The ReplBridge Workspace Agent runs **inside** a Replit workspace. It is the only component that touches your files, and it enforces every safety rule: token auth, path jail, blocklist, command allowlist, snapshots, and soft-delete.
 
-## What it does
+## Routes
 
 | Route | Auth | Description |
 |---|---|---|
 | `GET /health` | Public | Liveness check |
 | `GET /status` | Token | Stack, Node version, git branch |
 | `POST /files/list` | Token | Recursive file listing (sensitive paths hidden) |
-| `POST /files/read` | Token | Read a file (max 500KB, secrets blocked) |
+| `POST /files/read` | Token | Read a text file (max 500 KB, secrets/binaries rejected) |
 | `POST /files/write` | Token | Write a file (snapshots the previous version first) |
-| `POST /files/delete-soft` | Token | Move file to trash (never permanently deleted) |
-| `GET /commands/allowed` | Token | List of permitted commands |
+| `POST /files/delete-soft` | Token | Move a file to trash (never permanently deleted) |
+| `GET /commands/allowed` | Token | Permitted commands and timeout |
 | `POST /commands/run` | Token | Run an allowlisted command |
-| `GET /git/status` | Token | git status output |
-| `GET /git/diff` | Token | git diff output |
+| `GET /git/status` | Token | `git status` output |
+| `GET /git/diff` | Token | `git diff` output (`?staged=true` for `--staged`) |
+
+Every response has the shape `{ ok: true, data }` or `{ ok: false, error: { code, message } }`.
 
 ## Security model
 
-- **Token auth** — every protected route requires `Authorization: Bearer <REPLBRIDGE_PROJECT_TOKEN>`
-- **Path jail** — all file operations are confined to `REPLBRIDGE_WORKSPACE_ROOT`; path traversal (`../../etc/passwd`) is blocked
-- **Blocked paths** — `.env`, `.git`, `node_modules`, `secrets`, and other sensitive names are hidden from listings and denied on read/write
-- **Command allowlist** — only explicitly listed commands can run; arbitrary shell is impossible
-- **No permanent delete** — files go to `.replbridge/trash`, never gone forever
-- **Snapshots** — every file write creates a backup in `.replbridge/snapshots` first
+- **Token auth**: every route except `/health` requires `Authorization: Bearer <REPLBRIDGE_PROJECT_TOKEN>`, compared in constant time.
+- **Path jail**: all file operations are confined to `REPLBRIDGE_WORKSPACE_ROOT`. Both `..` traversal and symlinks pointing outside are rejected.
+- **Blocked paths**: `.env*`, `.git`, `node_modules`, `.replit`, `secrets`, `.replbridge`, and the agent's own folder are hidden and denied.
+- **Command allowlist**: only exact allowlisted strings run, via `spawn` with no shell, a timeout, capped output, and the token removed from the environment.
+- **No permanent delete**: files go to `.replbridge/trash`.
+- **Snapshots**: every overwrite backs up the previous version to `.replbridge/snapshots`.
 
-## Deploy to Replit
+See [docs/security.md](../../docs/security.md) for details and limits.
 
-### 1. Create a new Replit project
+## Configuration
 
-Use the Node.js template. Name it `replbridge-workspace-agent`.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `REPLBRIDGE_PROJECT_TOKEN` | ✓ | — | Shared secret (≥16 chars) |
+| `REPLBRIDGE_WORKSPACE_ROOT` | | current dir | Root Claude may access. On Replit: `/home/runner/workspace` |
+| `PORT` | | `3000` | Port to listen on |
+| `HOST` | | `0.0.0.0` | Interface to bind |
+| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | | `120000` | Kill commands after this long |
+| `REPLBRIDGE_EXTRA_COMMANDS` | | — | Comma-separated extra exact commands to allow |
 
-### 2. Copy these files into the project
+On Replit, set these in **Secrets**. Locally, a `.env` in the directory you start from is loaded automatically (real environment variables win).
 
-Copy the contents of this package into your Replit project root.
+## Run it in a Repl
 
-### 3. Set Secrets
+1. Copy this package (minus `node_modules/` and `dist/`) into a **`replbridge-agent/`** folder in your Repl. Keeping it in a subfolder avoids clashing with your project's `package.json` and lets the agent block its own code.
+2. Add `REPLBRIDGE_PROJECT_TOKEN` and `REPLBRIDGE_WORKSPACE_ROOT=/home/runner/workspace` to Secrets.
+3. In the Replit Shell:
 
-In Replit → Secrets, add:
+   ```bash
+   cd replbridge-agent
+   npm install
+   npm run build
+   npm start
+   ```
 
-```
-REPLBRIDGE_PROJECT_TOKEN  =  <generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
-REPLBRIDGE_WORKSPACE_ROOT =  /home/runner/workspace
-```
+4. Use the Repl's **dev URL** (Webview / Networking pane) as `REPLBRIDGE_AGENT_URL`.
 
-### 4. Start the agent
+> Run the agent in the workspace, **not** as a Replit Deployment. Published apps use a separate, snapshot filesystem, so edits would never reach your code.
+
+## Test it
 
 ```bash
-npm install
-npm run dev
-```
+curl https://<your-dev-url>/health
 
-The agent starts on port 3000. Replit will expose it publicly.
-
-### 5. Test it
-
-```bash
-# Health (no auth needed)
-curl https://your-agent.replit.app/health
-
-# Status (with token)
-curl https://your-agent.replit.app/status \
-  -H "Authorization: Bearer your-token-here"
+curl https://<your-dev-url>/status \
+  -H "Authorization: Bearer <your-token>"
 ```
 
 ## Local development
 
 ```bash
-cp .env.example .env
-# edit .env with a test token and your local workspace root
+cp .env.example .env   # set a test token and a workspace root
 npm install
 npm run dev
 ```

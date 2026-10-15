@@ -2,10 +2,10 @@
 /**
  * ReplBridge CLI
  *
- * Usage:
- *   npx @replbridge/init           — initialize ReplBridge in this project
- *   npx @replbridge/init doctor    — check your setup
- *   npx @replbridge/init uninstall — remove ReplBridge from this project
+ * Usage (from a clone of this repo: `node packages/cli/dist/index.js <command>`):
+ *   replbridge init       — initialize ReplBridge in this project
+ *   replbridge doctor     — check your setup, including a live agent connection
+ *   replbridge uninstall  — remove ReplBridge from this project
  */
 
 import { runInit } from "./commands/init.js";

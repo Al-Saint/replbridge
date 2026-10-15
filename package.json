@@ -6,10 +6,11 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run build && node --test --test-concurrency=1 test/e2e.test.mjs",
     "lint": "npm run lint --workspaces --if-present",
     "dev:agent": "npm run dev --workspace=packages/workspace-agent",
-    "dev:mcp": "npm run dev --workspace=packages/mcp-server"
+    "dev:mcp": "npm run dev --workspace=packages/mcp-server",
+    "doctor": "node packages/cli/dist/index.js doctor"
   },
   "workspaces": [
     "packages/workspace-agent",
@@ -29,6 +30,6 @@
   "author": "Alex Santos",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.12"
   }
 }

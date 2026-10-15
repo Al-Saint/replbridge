@@ -1,5 +1,5 @@
-import dotenv from "dotenv";
-dotenv.config();
+// Must be first: loads .env and validates configuration before anything else.
+import { HOST, PORT, WORKSPACE_ROOT, AGENT_DIR } from "./config.js";
 
 import express, { Request, Response, NextFunction } from "express";
 import { requireAuth } from "./middleware/auth.js";
@@ -9,7 +9,6 @@ import { commandsRouter } from "./routes/commands.js";
 import { gitRouter } from "./routes/git.js";
 
 const app = express();
-const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 // ─── Hardening ──────────────────────────────────────────────────────────────
 // Don't advertise Express in responses (minor information-disclosure hardening).
@@ -20,8 +19,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // Request logging (dev-friendly, no secrets logged)
 app.use((req, _res, next) => {
-  const safe = req.path !== "/health";
-  if (safe) {
+  if (req.path !== "/health") {
     process.stdout.write(`[${new Date().toISOString()}] ${req.method} ${req.path}\n`);
   }
   next();
@@ -56,12 +54,21 @@ app.use((_req, res) => {
 });
 
 // ─── Global error handler ───────────────────────────────────────────────────
-// Catches any thrown/next(err) from route handlers so the process never crashes
-// and clients always get the standard { ok:false, error:{ code, message } } shape.
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  process.stderr.write(
-    `[ReplBridge] Unhandled error: ${err?.message ?? err}\n`
-  );
+// Catches any thrown/rejected error from route handlers (Express 5 forwards
+// async rejections here too) so the process never crashes and clients always
+// get the standard { ok:false, error:{ code, message } } shape.
+app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
+  // Malformed JSON / oversized bodies from express.json()
+  if (err?.type === "entity.parse.failed") {
+    res.status(400).json({ ok: false, error: { code: "INVALID_JSON", message: "Request body is not valid JSON." } });
+    return;
+  }
+  if (err?.type === "entity.too.large") {
+    res.status(413).json({ ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "Request body exceeds 2MB." } });
+    return;
+  }
+
+  process.stderr.write(`[ReplBridge] Unhandled error: ${err?.stack ?? err}\n`);
   res.status(500).json({
     ok: false,
     error: {
@@ -72,23 +79,34 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  const root = process.env.REPLBRIDGE_WORKSPACE_ROOT ?? process.cwd();
+const server = app.listen(PORT, HOST, () => {
+  const agentInsideRoot = AGENT_DIR.startsWith(WORKSPACE_ROOT + "/");
   process.stdout.write(
-    `\n[ReplBridge Workspace Agent] Running on port ${PORT}\n` +
-      `  Workspace root: ${root}\n` +
-      `  Token auth:     enabled\n\n`
+    `\n[ReplBridge Workspace Agent] Listening on http://${HOST}:${PORT}\n` +
+      `  Workspace root: ${WORKSPACE_ROOT}\n` +
+      `  Token auth:     enabled\n` +
+      (agentInsideRoot
+        ? `  Agent folder:   ${AGENT_DIR} (blocked from Claude)\n`
+        : AGENT_DIR === WORKSPACE_ROOT
+          ? `  WARNING: the agent is installed AT the workspace root, so Claude can edit\n` +
+            `           the agent's own code. Install it in a subfolder instead (see README).\n`
+          : "") +
+      "\n"
   );
 });
 
-// ─── Keepalive ──────────────────────────────────────────────────────────────
-// Ping own /health every 4 minutes to prevent Replit from putting the Repl to
-// sleep. Without this, an idle Repl starts serving Replit's HTML "waking up"
-// page instead of JSON, breaking every MCP tool call.
-const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000;
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    process.stderr.write(`[ReplBridge] FATAL: port ${PORT} is already in use. Set PORT to a free port.\n`);
+  } else {
+    process.stderr.write(`[ReplBridge] FATAL: ${err.message}\n`);
+  }
+  process.exit(1);
+});
 
-setInterval(() => {
-  fetch(`http://localhost:${PORT}/health`).catch((err: Error) => {
-    process.stderr.write(`[keepalive] ping failed: ${err.message}\n`);
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000).unref();
   });
-}, KEEPALIVE_INTERVAL_MS);
+}

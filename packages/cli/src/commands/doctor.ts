@@ -9,8 +9,36 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 const CWD = process.cwd();
+// packages/cli/dist/commands → packages/
+const PACKAGES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const MCP_DIR = path.join(PACKAGES_DIR, "mcp-server");
+
+/** Parse KEY=value lines from a .env file (no dependency needed). */
+function readEnvFile(file: string): Record<string, string> {
+  if (!fs.existsSync(file)) return {};
+  const out: Record<string, string> = {};
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m) out[m[1]] = m[2].replace(/^(['"])(.*)\1$/, "$2");
+  }
+  return out;
+}
+
+async function getJson(url: string, token?: string): Promise<{ status: number; body: any }> {
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal: AbortSignal.timeout(10_000),
+  });
+  const text = await res.text();
+  try {
+    return { status: res.status, body: JSON.parse(text) };
+  } catch {
+    return { status: res.status, body: null };
+  }
+}
 
 type CheckStatus = "ok" | "warn" | "fail";
 
@@ -48,7 +76,7 @@ export async function runDoctor(): Promise<void> {
     }
   } else {
     checks.push(
-      check("ReplBridge initialized", "fail", "Run: npx @replbridge/init")
+      check("ReplBridge initialized", "warn", "No .replbridge/config.json here (optional — run `replbridge init` to create one)")
     );
   }
 
@@ -78,13 +106,56 @@ export async function runDoctor(): Promise<void> {
   }
 
   // ── MCP server build ──────────────────────────────────────────────────────
-  const mcpDist = path.join(CWD, "packages", "mcp-server", "dist", "index.js");
+  const mcpDist = path.join(MCP_DIR, "dist", "index.js");
   if (fs.existsSync(mcpDist)) {
-    checks.push(check("MCP server built", "ok", `dist/index.js exists`));
-  } else {
+    checks.push(check("MCP server built", "ok", mcpDist));
+  } else if (fs.existsSync(MCP_DIR)) {
+    checks.push(check("MCP server built", "fail", "Run: npm run build (from the repo root)"));
+  }
+
+  // ── Live connection to the Workspace Agent ────────────────────────────────
+  // Uses the same config the MCP server would: process env first, then
+  // packages/mcp-server/.env.
+  const mcpEnv = { ...readEnvFile(path.join(MCP_DIR, ".env")), ...process.env };
+  const agentUrl = mcpEnv.REPLBRIDGE_AGENT_URL?.replace(/\/+$/, "");
+  const token = mcpEnv.REPLBRIDGE_PROJECT_TOKEN;
+  if (!agentUrl || agentUrl.includes("your-replit-project-url")) {
     checks.push(
-      check("MCP server built", "fail", "Run: cd packages/mcp-server && npm run build")
+      check("Workspace Agent reachable", "warn", "REPLBRIDGE_AGENT_URL not set — skipping live check")
     );
+  } else {
+    try {
+      const health = await getJson(`${agentUrl}/health`);
+      if (health.body?.ok !== true) {
+        checks.push(
+          check(
+            "Workspace Agent reachable",
+            "fail",
+            `${agentUrl}/health returned HTTP ${health.status} but not a ReplBridge response — is the Repl running and the URL right?`
+          )
+        );
+      } else {
+        checks.push(check("Workspace Agent reachable", "ok", agentUrl));
+        if (!token) {
+          checks.push(check("Token accepted", "warn", "REPLBRIDGE_PROJECT_TOKEN not set — skipping auth check"));
+        } else {
+          const status = await getJson(`${agentUrl}/status`, token);
+          if (status.body?.ok === true) {
+            checks.push(
+              check("Token accepted", "ok", `workspace ${status.body.data.workspaceRoot} (${status.body.data.stack})`)
+            );
+          } else {
+            checks.push(
+              check("Token accepted", "fail", status.body?.error?.message ?? `HTTP ${status.status}`)
+            );
+          }
+        }
+      }
+    } catch (err) {
+      checks.push(
+        check("Workspace Agent reachable", "fail", `${agentUrl}: ${(err as Error).message}`)
+      );
+    }
   }
 
   // ── .gitignore ────────────────────────────────────────────────────────────
@@ -103,12 +174,12 @@ export async function runDoctor(): Promise<void> {
   }
 
   // ── Node version ──────────────────────────────────────────────────────────
-  const nodeVersion = parseInt(process.version.slice(1).split(".")[0], 10);
-  if (nodeVersion >= 18) {
-    checks.push(check(`Node.js ${process.version}`, "ok", "≥18 required"));
+  const [major, minor] = process.version.slice(1).split(".").map(Number);
+  if (major > 20 || (major === 20 && minor >= 12)) {
+    checks.push(check(`Node.js ${process.version}`, "ok", "≥20.12 required"));
   } else {
     checks.push(
-      check(`Node.js ${process.version}`, "fail", "ReplBridge requires Node.js ≥18")
+      check(`Node.js ${process.version}`, "fail", "ReplBridge requires Node.js ≥20.12")
     );
   }
 
@@ -128,6 +199,8 @@ export async function runDoctor(): Promise<void> {
 
   if (failures === 0 && warnings === 0) {
     console.log("  Everything looks good. Claude is ready to use ReplBridge.\n");
+  } else if (failures === 0) {
+    console.log("  No failures. Review the warnings above if something isn't working.\n");
   } else if (failures > 0) {
     console.log("  Fix the failures above before connecting Claude Desktop.\n");
     process.exit(1);

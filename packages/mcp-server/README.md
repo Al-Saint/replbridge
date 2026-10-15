@@ -1,54 +1,56 @@
 # @replbridge/mcp-server
 
-The ReplBridge MCP server. Connects Claude Desktop (or any MCP client) to a Replit workspace through the [ReplBridge Workspace Agent](../workspace-agent/README.md).
+The ReplBridge MCP server. It connects Claude Code, Claude Desktop, or any MCP client to a Replit workspace through the [ReplBridge Workspace Agent](../workspace-agent/README.md).
 
 ```
-Claude Desktop / Claude Code
-        ↓  (stdio MCP)
+Claude Code / Claude Desktop
+        ↓  stdio (MCP)
 @replbridge/mcp-server      ← this package
-        ↓  (HTTPS)
-ReplBridge Workspace Agent  (running inside Replit)
+        ↓  HTTPS + Bearer token
+ReplBridge Workspace Agent  (running inside your Replit workspace)
         ↓
 Your Replit project
 ```
 
+Built on the official [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) (`McpServer` + Zod schemas). Every tool carries MCP annotations (`readOnlyHint`, etc.), and failures are returned with `isError: true` so the model knows a call didn't work.
+
 ## Prerequisites
 
-- Node.js 18+
-- The Workspace Agent deployed and running inside a Replit project
-- The agent's public URL and project token
+- Node.js ≥ 20.12
+- The Workspace Agent running in a Replit workspace, plus its URL and project token
 
-## Setup
+## Build
 
-### 1. Install dependencies
+From the repo root:
 
 ```bash
-cd packages/mcp-server
 npm install
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-REPLBRIDGE_AGENT_URL=https://your-agent-url.replit.app
-REPLBRIDGE_PROJECT_TOKEN=your-token-here
-```
-
-### 3. Build
-
-```bash
 npm run build
 ```
 
-### 4. Add to Claude Desktop
+## Configure
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your OS:
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `REPLBRIDGE_AGENT_URL` | ✓ | — | Public URL of the Workspace Agent |
+| `REPLBRIDGE_PROJECT_TOKEN` | ✓ | — | Must match the agent's token (≥16 chars) |
+| `REPLBRIDGE_TIMEOUT_MS` | | `30000` | Per-request timeout |
+| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | | `150000` | Timeout for `run_command` |
+
+Set them in your MCP client's `env` block (recommended), or in `packages/mcp-server/.env` (see `.env.example`). The `.env` next to the package is found no matter what working directory the client uses.
+
+## Connect
+
+**Claude Code**
+
+```bash
+claude mcp add replbridge \
+  -e REPLBRIDGE_AGENT_URL=https://<your-dev-url> \
+  -e REPLBRIDGE_PROJECT_TOKEN=<your-token> \
+  -- node /absolute/path/to/replbridge/packages/mcp-server/dist/index.js
+```
+
+**Claude Desktop** (`claude_desktop_config.json`)
 
 ```json
 {
@@ -57,51 +59,53 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
       "command": "node",
       "args": ["/absolute/path/to/replbridge/packages/mcp-server/dist/index.js"],
       "env": {
-        "REPLBRIDGE_AGENT_URL": "https://your-agent-url.replit.app",
-        "REPLBRIDGE_PROJECT_TOKEN": "your-token-here"
+        "REPLBRIDGE_AGENT_URL": "https://<your-dev-url>",
+        "REPLBRIDGE_PROJECT_TOKEN": "<your-token>"
       }
     }
   }
 }
 ```
 
-Restart Claude Desktop.
-
-### 5. Test it
-
-In Claude Desktop, try:
-
-```
-Use ReplBridge to check the workspace status.
-Use ReplBridge to list the files in the workspace.
-Use ReplBridge to read package.json.
-```
-
 ## Available tools
 
-| Tool | What it does |
+| Tool | Read-only | What it does |
+|---|---|---|
+| `workspace_status` | ✓ | Workspace root, Node version, detected stack, git branch |
+| `list_files` | ✓ | Lists files (sensitive paths hidden); `path`, `depth` 1–5 |
+| `read_file` | ✓ | Returns the raw file contents |
+| `write_file` | | Writes the full file; snapshots the previous version |
+| `soft_delete_file` | | Moves a file to `.replbridge/trash` |
+| `list_allowed_commands` | ✓ | The exact permitted commands and the timeout |
+| `run_command` | | Runs an allowlisted command; non-zero exit → `isError` |
+| `git_status` | ✓ | `git status` |
+| `git_diff` | ✓ | `git diff`, or `staged: true` for `--staged` |
+
+## Error codes
+
+Besides the agent's own codes (`BLOCKED_PATH`, `PATH_TRAVERSAL`, `COMMAND_NOT_ALLOWED`, `UNAUTHORIZED`, …), the server reports connection problems as:
+
+| Code | Meaning |
 |---|---|
-| `workspace_status` | Reports cwd, Node version, detected stack, git branch |
-| `list_files` | Lists files (sensitive paths hidden) |
-| `read_file` | Reads a file safely |
-| `write_file` | Writes a file, creates a snapshot of the previous version |
-| `soft_delete_file` | Moves a file to .replbridge/trash (not permanently deleted) |
-| `list_allowed_commands` | Shows which commands are permitted |
-| `run_command` | Runs an allowlisted command |
-| `git_status` | Shows git status |
-| `git_diff` | Shows unstaged changes |
+| `AGENT_UNREACHABLE` | Couldn't connect (wrong URL, agent not running) |
+| `AGENT_TIMEOUT` | Connected but no response in time |
+| `AGENT_BAD_RESPONSE` | Got a non-ReplBridge response, typically Replit's HTML page for a sleeping Repl or the wrong port |
 
 ## Development
 
 ```bash
-npm run dev       # run with tsx (no build step)
-npm run typecheck # check types
-npm run build     # compile to dist/
+npm run dev        # run with tsx (no build step)
+npm run typecheck
+npm run build
+npx @modelcontextprotocol/inspector node dist/index.js   # interactive testing
 ```
+
+End-to-end tests live in the repo-level `test/` folder (`npm test` from the root).
 
 ## Security
 
-- The project token is never logged or returned in responses
-- All inputs are validated with Zod before being sent to the agent
-- The agent enforces its own path jail and command allowlist — this server is a trusted translator, not a gatekeeper
-- See [security docs](../../docs/security.md) for the full security model
+- The project token is never logged or returned in responses.
+- All inputs are validated with Zod before being sent to the agent.
+- The agent enforces its own path jail and command allowlist. This server is a trusted translator, not a gatekeeper.
+- Nothing except MCP protocol messages is written to stdout.
+- See the [security docs](../../docs/security.md) for the full model.

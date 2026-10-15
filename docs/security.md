@@ -1,6 +1,6 @@
 # ReplBridge security model
 
-ReplBridge gives Claude **controlled developer powers**, not unrestricted system access. This document explains exactly what Claude can and can't do.
+ReplBridge gives Claude **controlled developer powers**, not unrestricted system access. This document explains exactly what Claude can and can't do — and where the limits of those guarantees are.
 
 ## The principle
 
@@ -10,72 +10,81 @@ ReplBridge gives Claude **controlled developer powers**, not unrestricted system
 
 | Action | Details |
 |---|---|
-| Read files | Any file not on the blocked list, max 500KB |
-| List files | Recursive listing, sensitive paths hidden |
-| Write files | Any non-blocked path — previous version is snapshotted first |
-| Soft-delete files | Files go to `.replbridge/trash`, never permanently gone |
-| Run allowed commands | `npm install`, `npm test`, `git status`, `python -m pytest`, and a few others |
+| Read files | Any non-blocked text file, max 500 KB |
+| List files | Recursive listing, sensitive paths hidden, max 2,000 entries |
+| Write files | Any non-blocked path; the previous version is snapshotted first |
+| Soft-delete files | Files go to `.replbridge/trash`, never permanently deleted |
+| Run allowed commands | Exact allowlist only, no shell, killed at a timeout |
 | Check git status/diff | Read-only git operations |
 
 ## What Claude CANNOT do
 
 | Action | Why |
 |---|---|
-| Read `.env` or secrets | Explicitly blocked by name pattern |
-| Read files > 500KB | Size limit prevents accidentally reading huge blobs |
-| Run arbitrary shell commands | Strict allowlist — only pre-approved commands work |
-| Delete files permanently | Soft-delete only — files go to trash |
-| Access paths outside workspace root | Path jail — `../../etc/passwd` is blocked |
-| See `node_modules`, `.git`, `.config` | Excluded from listings and blocked on read/write |
-| Commit or push to git | git write operations are not on the allowlist |
-| Make network requests | The agent has no outbound network tools |
+| Read or write `.env*` or secrets | Blocked by name and pattern |
+| Escape the workspace | `..` and absolute paths are rejected, and **symlinks are resolved** before the check, so a link to `/etc` doesn't work |
+| Edit the agent itself | The agent's install folder is blocked when it's inside the workspace |
+| Run arbitrary shell commands | Strict allowlist, executed with `spawn` (no shell, so `;`, `&&` and pipes have no effect) |
+| See the project token from a command | `REPLBRIDGE_PROJECT_TOKEN` is removed from every command's environment |
+| Delete files permanently | Soft-delete only |
+| Commit or push | git write operations aren't on the allowlist |
+| Hang the agent | Commands are killed after `REPLBRIDGE_COMMAND_TIMEOUT_MS`, output is capped at 200 KB per stream |
+
+## Know the limits: allowlisted commands run project code
+
+The allowlist controls *which* commands run, not *what they do*. `npm test`, `npm run build`, `python main.py` and the other entries execute **your project's own scripts**, and Claude can edit those files with `write_file`. A determined (or confused) model could therefore write a script and then run it via an allowlisted command.
+
+In practice this means:
+
+- Treat ReplBridge as protection against **accidents and casual misuse** (wrong paths, leaked secrets, destructive deletes, runaway processes), not as a sandbox against a hostile operator.
+- Replit's own container is the real isolation boundary. Don't run the agent in a Repl that holds credentials you can't afford to expose.
+- Trim the allowlist in `packages/workspace-agent/src/security/safeCommands.ts` if you want a read-only setup (for example, remove the `npm`/`python` entries).
 
 ## Token security
 
-- Each Replit project gets its own token
-- The token is compared using a constant-time comparison (prevents timing attacks)
-- The MCP server never logs the token
-- Tokens should be treated like passwords — never committed to git, never shared
+- Each Replit project should get its own token (≥16 characters; 32 random bytes recommended).
+- Tokens are compared in constant time (SHA-256 digests + `timingSafeEqual`), so neither the content nor the length leaks through timing.
+- The MCP server and agent never log the token.
+- Treat tokens like passwords: never commit them, and rotate one by changing the Secret and your MCP config, then restarting the agent.
+- `/health` is the only unauthenticated route.
 
 ## Snapshots
 
-Every time Claude writes a file, a copy of the **previous version** is saved to `.replbridge/snapshots/` first. The snapshot filename includes a timestamp so you can identify and restore any version.
-
-This means: **Claude can never silently destroy your work.**
+Every time Claude overwrites a file, a copy of the **previous version** is saved to `.replbridge/snapshots/<path>__<timestamp>` first. Claude can't read or modify `.replbridge/`, so snapshots can't be tampered with through ReplBridge.
 
 ## Blocklist
 
-These names are blocked from all file operations and hidden from listings:
+These names are blocked anywhere in a path, for all file operations, and hidden from listings:
 
 ```
-.env  .env.local  .env.production  .env.development
-node_modules  .git  .config  .replit  repl.nix
-.cache  secrets
+.env  .env.*  node_modules  .git  .config  .replit  replit.nix  repl.nix
+.cache  secrets  .replbridge  .ssh  .npmrc
 ```
 
-Any filename starting with `.env` is also blocked.
+The agent's own install folder (e.g. `replbridge-agent/`) is also blocked. Build output (`dist`, `build`, `coverage`, `.next`, `__pycache__`, `venv`, …) is hidden from listings but can still be read directly.
 
 ## Command allowlist
 
-Only these exact command strings are permitted:
+Only these exact strings (after whitespace normalization) are permitted:
 
 ```
-npm install          npm run build       npm run test
-npm run lint         npm run dev         npm run start
+npm install          npm ci              npm test
+npm run build        npm run test        npm run lint
+npm run typecheck    npm run dev         npm run start
 python -m pytest     python main.py      python app.py
 pip install -r requirements.txt
-git status           git diff            git log --oneline -5
-git log --oneline -10                   git branch
+git status           git diff            git diff --staged
+git log --oneline -5 git log --oneline -10  git log --oneline -20
+git branch
 ```
 
-A command that isn't on this list returns a `COMMAND_NOT_ALLOWED` error immediately — no shell is invoked.
+You can add project-specific entries with the `REPLBRIDGE_EXTRA_COMMANDS` Secret (comma-separated, exact strings). Anything else returns `COMMAND_NOT_ALLOWED` immediately, without starting a process.
 
 ## Future security improvements
 
 These are planned but not yet built:
 
 - Rate limiting per token
-- Signed agent handshake (prevents token replay)
 - Project-level permission scopes (read-only mode)
 - Audit log of every action Claude took
 - Explicit approval flow for destructive actions

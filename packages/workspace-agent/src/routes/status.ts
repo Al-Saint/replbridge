@@ -2,14 +2,13 @@ import { Router } from "express";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { WORKSPACE_ROOT } from "../config.js";
 import { ok } from "../utils/respond.js";
 import { detectStack } from "../utils/stackDetect.js";
 
 export const statusRouter = Router();
 
-const WORKSPACE_ROOT = process.env.REPLBRIDGE_WORKSPACE_ROOT || process.cwd();
-
-statusRouter.get("/status", (req, res) => {
+statusRouter.get("/status", (_req, res) => {
   const stackInfo = detectStack(WORKSPACE_ROOT);
 
   // Check git initialization
@@ -27,7 +26,8 @@ statusRouter.get("/status", (req, res) => {
       gitBranch = execSync("git branch --show-current", {
         cwd: WORKSPACE_ROOT,
         encoding: "utf8",
-      }).trim();
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null;
     } catch {
       gitBranch = null;
     }

@@ -17,9 +17,15 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { fileURLToPath } from "url";
 import prompts from "prompts";
 
 const CWD = process.cwd();
+// packages/cli/dist/commands → packages/mcp-server/dist/index.js
+const MCP_ENTRY = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "..", "mcp-server", "dist", "index.js"
+);
 const REPLBRIDGE_DIR = path.join(CWD, ".replbridge");
 const CONFIG_PATH = path.join(REPLBRIDGE_DIR, "config.json");
 
@@ -104,7 +110,7 @@ export async function runInit(): Promise<void> {
   // ── Write .env.example ────────────────────────────────────────────────────
   const envExamplePath = path.join(CWD, ".env.example");
   const envContent =
-    `# ReplBridge — added by npx @replbridge/init\n` +
+    `# ReplBridge — added by replbridge init\n` +
     `REPLBRIDGE_PROJECT_TOKEN=\${REPLBRIDGE_PROJECT_TOKEN}\n` +
     `REPLBRIDGE_WORKSPACE_ROOT=/home/runner/workspace\n`;
 
@@ -152,11 +158,12 @@ export async function runInit(): Promise<void> {
   console.log(`  Value:  /home/runner/workspace\n`);
 
   console.log("  " + line("─", 58) + "\n");
-  console.log("  STEP 2 — Deploy the Workspace Agent to that Replit project\n");
-  console.log("  Copy packages/workspace-agent/ into your Replit project.");
-  console.log("  Run:  npm install && npm run dev\n");
-  console.log("  Your agent URL will be:");
-  console.log("  https://<project-name>.<username>.replit.app\n");
+  console.log("  STEP 2 — Run the Workspace Agent inside that Replit project\n");
+  console.log("  Copy packages/workspace-agent/ to a replbridge-agent/ folder in your Repl.");
+  console.log("  In the Replit Shell run:");
+  console.log("  cd replbridge-agent && npm install && npm run build && npm start\n");
+  console.log("  Your agent URL is the Repl's dev URL shown in the Webview / Networking tab,");
+  console.log("  e.g. https://<id>.<region>.replit.dev\n");
 
   console.log("  " + line("─", 58) + "\n");
   console.log("  STEP 3 — Connect Claude Desktop\n");
@@ -167,9 +174,9 @@ export async function runInit(): Promise<void> {
   const desktopConfig = {
     replbridge: {
       command: "node",
-      args: [path.join(CWD, "packages/mcp-server/dist/index.js")],
+      args: [MCP_ENTRY],
       env: {
-        REPLBRIDGE_AGENT_URL: "https://YOUR-AGENT-URL.replit.app",
+        REPLBRIDGE_AGENT_URL: "https://YOUR-AGENT-URL.replit.dev",
         REPLBRIDGE_PROJECT_TOKEN: token,
       },
     },
@@ -180,9 +187,13 @@ export async function runInit(): Promise<void> {
     .map((l) => "  " + l)
     .join("\n"));
 
-  console.log("\n  Then: build the MCP server with:");
-  console.log("  cd packages/mcp-server && npm install && npm run build\n");
-  console.log("  And restart Claude Desktop.\n");
+  console.log("\n  Then build the MCP server (from the repo root):  npm install && npm run build");
+  console.log("  and restart Claude Desktop.\n");
+  console.log("  Using Claude Code instead? Run:\n");
+  console.log(
+    `  claude mcp add replbridge -e REPLBRIDGE_AGENT_URL=https://YOUR-AGENT-URL.replit.dev ` +
+      `-e REPLBRIDGE_PROJECT_TOKEN=${token} -- node ${MCP_ENTRY}\n`
+  );
 
   console.log(line("═") + "\n");
 }

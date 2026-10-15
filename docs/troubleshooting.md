@@ -1,73 +1,85 @@
 # Troubleshooting
 
-## Claude says "I don't have a ReplBridge tool"
+Start with the doctor. It checks the build, reaches the agent, and validates the token:
 
-Claude Desktop isn't loading the MCP server. Check:
+```bash
+REPLBRIDGE_AGENT_URL=https://<your-dev-url> REPLBRIDGE_PROJECT_TOKEN=<your-token> npm run doctor
+```
 
-1. The path in `claude_desktop_config.json` is **absolute**, not relative
-2. `packages/mcp-server/dist/index.js` exists — run `npm run build` inside `packages/mcp-server/`
-3. You restarted Claude Desktop after editing the config
-4. The config JSON is valid — paste it into [jsonlint.com](https://jsonlint.com) to check
+## Claude says it doesn't have a ReplBridge tool
 
-## "AGENT_UNREACHABLE" error
+The MCP client isn't loading the server. Check that:
 
-The MCP server can't reach the Workspace Agent. Check:
+1. The path to `packages/mcp-server/dist/index.js` is **absolute**.
+2. That file exists. If not, run `npm run build` from the repo root.
+3. You fully restarted Claude Desktop after editing the config (quit it from the tray/menu bar, not just the window).
+4. The config is valid JSON.
+5. For Claude Code, `claude mcp list` shows `replbridge` as connected.
 
-1. Your Replit project is running (not sleeping)
-2. `REPLBRIDGE_AGENT_URL` in your Claude Desktop config matches the live Replit URL exactly
-3. The URL ends without a trailing slash
-4. Test with: `curl https://your-agent.replit.app/health`
+Claude Desktop writes MCP server logs to `~/Library/Logs/Claude/mcp-server-replbridge.log` (macOS) or `%APPDATA%\Claude\logs\` (Windows). On startup, ReplBridge logs either `Connected to Workspace Agent ✓` or the exact problem.
 
-## "UNAUTHORIZED" error
+## `Configuration error` on startup
 
-The token doesn't match. Check:
+`REPLBRIDGE_AGENT_URL` or `REPLBRIDGE_PROJECT_TOKEN` is missing or invalid. Set both in your MCP client's `env` block, or in `packages/mcp-server/.env`. The token must be at least 16 characters.
 
-1. `REPLBRIDGE_PROJECT_TOKEN` in Claude Desktop config matches what's in Replit Secrets exactly
-2. There are no leading/trailing spaces in either value
-3. You're using the same token in both places
+## `AGENT_UNREACHABLE`
 
-## The Workspace Agent won't start
+The MCP server can't open a connection to the agent. Check that:
 
-1. Check Replit Secrets — `REPLBRIDGE_PROJECT_TOKEN` must be set
-2. Run `npm install` inside the project
-3. Check the Replit console for the error message
+1. The agent is running in the Replit Shell (`npm start` inside `replbridge-agent/`).
+2. `REPLBRIDGE_AGENT_URL` matches the Repl's current dev URL exactly.
+3. `curl https://<your-dev-url>/health` works from your machine.
 
-## "BLOCKED_PATH" when reading a file
+## `AGENT_BAD_RESPONSE` (got an HTML page)
 
-The file is on the security blocklist. This is intentional for `.env`, `node_modules`, `.git`, etc. If you think a file is being incorrectly blocked, check `packages/workspace-agent/src/security/safePaths.ts`.
+Something answered at that URL, but it wasn't the agent. Usually it's one of these:
+
+- **The Repl is asleep or still starting.** Replit is serving its own page. Open the Repl and make sure the agent is running.
+- **The URL points at the wrong port or app.** The dev URL may be routing to your project's own web server rather than the agent. Check the Networking pane and make sure the agent's port has an external mapping.
+
+## `AGENT_TIMEOUT`
+
+The agent accepted the connection but didn't answer within `REPLBRIDGE_TIMEOUT_MS` (default 30 s). If it happens on `run_command`, raise `REPLBRIDGE_COMMAND_TIMEOUT_MS` in the MCP client env. Keep it above the agent's own command timeout.
+
+## `UNAUTHORIZED`
+
+The token doesn't match. Check that:
+
+1. `REPLBRIDGE_PROJECT_TOKEN` is identical in Replit Secrets and in your MCP client config.
+2. You restarted the agent after changing the Secret. Secrets are read at startup.
+
+## The agent won't start
+
+The agent prints a `FATAL:` line explaining why:
+
+- `REPLBRIDGE_PROJECT_TOKEN is not set` / `must be at least 16 characters`: fix the Secret.
+- `REPLBRIDGE_WORKSPACE_ROOT does not exist`: on Replit it's normally `/home/runner/workspace`.
+- `port 3000 is already in use`: another process (often your own app) is using the port. Set `PORT` to something else, e.g. `3001`, and map that port in Networking.
+
+## Use the workspace, not a Deployment
+
+If edits "succeed" but never show up in your editor, the agent is probably running as a **published app (Deployment)**. Published apps run from a snapshot with a separate filesystem that resets on every publish, so changes there never reach your code. Run the agent from the Replit Shell in the workspace and use the workspace's dev URL.
+
+## The Repl stops when I close the tab
+
+Replit workspaces can stop after inactivity. The agent can't prevent this from inside the Repl (pinging itself on `localhost` doesn't count as activity). Keep the Repl open while you work with Claude, and re-run `npm start` in `replbridge-agent/` if it stopped.
+
+## `BLOCKED_PATH` when reading a file
+
+The file is on the security blocklist. This is intentional for `.env*`, `node_modules`, `.git`, `.replit`, `.replbridge`, the agent's own folder, and similar. The full list is in `packages/workspace-agent/src/security/safePaths.ts`.
+
+## `PATH_TRAVERSAL`
+
+The path resolves outside the workspace, either through `..` or through a symlink that points outside. This is intentional.
+
+## `COMMAND_NOT_ALLOWED`
+
+Only exact allowlisted commands run, and there's no shell, so `&&`, pipes and redirects don't work. Ask Claude to call `list_allowed_commands`, or add project-specific commands with the `REPLBRIDGE_EXTRA_COMMANDS` Secret (comma-separated), then restart the agent.
+
+## A command "hangs" and then returns `timedOut: true`
+
+Long-running commands such as `npm run dev` are killed after `REPLBRIDGE_COMMAND_TIMEOUT_MS` (default 2 minutes), and the output so far is returned. This is expected for dev servers.
 
 ## Snapshots filling up disk
 
-Snapshots accumulate in `.replbridge/snapshots/`. You can safely delete old ones — they're just backups. The trash is in `.replbridge/trash/`.
-
-## Run the doctor
-
-```bash
-npx @replbridge/init doctor
-```
-
-This checks your entire setup and tells you exactly what's wrong.
-
-
-## Replit port mapping / public URL unreachable
-
-If `curl https://<your-agent>.replit.app/health` times out or returns a Replit landing page instead of `{ "ok": true }`, the Workspace Agent is running but Replit isn't routing traffic to it. Check:
-
-1. **Bind to `0.0.0.0`, not `127.0.0.1`.** The agent must listen on `0.0.0.0` so Replit's edge can reach it. Verify `packages/workspace-agent/src/index.ts` passes `0.0.0.0` as the host.
-2. 2. **Match the Replit `[[ports]]` mapping.** In `.replit`, the `localPort` must equal the port the agent listens on (default `3001`). The `externalPort` should be `80` (or `443`) so the public URL resolves without a custom port.
-   3. 3. **Use the stable `.replit.app` domain.** The `.replit.dev` preview URL only works while the editor tab is open. For Claude Desktop, always use the deployed `.replit.app` URL.
-      4. 4. **Don't run two servers on the same port.** If you see `EADDRINUSE`, another Repl process (or a leftover dev server) is holding the port. Stop it or change `REPLBRIDGE_AGENT_PORT`.
-         5. 5. **Keep the Repl awake.** Free Repls sleep after inactivity; the first request after a sleep may time out. Upgrade to Always-On or keep the tab open while testing.
-           
-            6. Quick diagnosis:
-           
-            7. ```bash
-               # From the Replit shell — should print "ok"
-               curl -s http://localhost:3001/health | jq -r .ok
-
-               # From your laptop — should also print "ok"
-               curl -s https://<your-agent>.replit.app/health | jq -r .ok
-               ```
-
-               If the first works but the second doesn't, the problem is port mapping, not the agent.
-               
+Snapshots accumulate in `.replbridge/snapshots/` and trash in `.replbridge/trash/`. Delete old ones from the Replit file tree or Shell whenever you like. They're only backups.

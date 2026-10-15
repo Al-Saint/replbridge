@@ -2,347 +2,238 @@
 /**
  * ReplBridge MCP Server
  *
- * Exposes 9 tools that let Claude safely inspect, edit, and run commands
+ * Exposes tools that let Claude safely inspect, edit, and run commands
  * inside a Replit project via the ReplBridge Workspace Agent.
  *
- * Transport: stdio (compatible with Claude Desktop and Claude Code)
+ * Transport: stdio (compatible with Claude Desktop, Claude Code, and any
+ * other MCP client)
  *
  * Required env vars:
  *   REPLBRIDGE_AGENT_URL     — the public URL of the Workspace Agent
  *   REPLBRIDGE_PROJECT_TOKEN — the Bearer token for the Workspace Agent
+ *
+ * Optional:
+ *   REPLBRIDGE_TIMEOUT_MS         — per-request timeout (default 30000)
+ *   REPLBRIDGE_COMMAND_TIMEOUT_MS — run_command timeout (default 150000)
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import dotenv from "dotenv";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { AgentClient, formatAgentResponse } from "./agent.js";
+import { AgentClient, formatAgentResponse, type AgentResponse } from "./agent.js";
+import { loadConfig, PACKAGE_VERSION } from "./config.js";
 
-dotenv.config();
-
-// ─── Config validation ────────────────────────────────────────────────────────
-
-const ConfigSchema = z.object({
-  REPLBRIDGE_AGENT_URL: z
-    .string({ required_error: "REPLBRIDGE_AGENT_URL is required" })
-    .url("REPLBRIDGE_AGENT_URL must be a valid URL"),
-  REPLBRIDGE_PROJECT_TOKEN: z
-    .string({ required_error: "REPLBRIDGE_PROJECT_TOKEN is required" })
-    .min(8, "REPLBRIDGE_PROJECT_TOKEN must be at least 8 characters"),
-});
-
-const configResult = ConfigSchema.safeParse(process.env);
-if (!configResult.success) {
-  const issues = configResult.error.issues.map((i) => `  • ${i.message}`).join("\n");
-  process.stderr.write(`\n[ReplBridge] Configuration error:\n${issues}\n\n`);
-  process.exit(1);
-}
-
-const config = configResult.data;
+const config = loadConfig();
 const agent = new AgentClient({
   agentUrl: config.REPLBRIDGE_AGENT_URL,
   projectToken: config.REPLBRIDGE_PROJECT_TOKEN,
+  timeoutMs: config.REPLBRIDGE_TIMEOUT_MS,
+  commandTimeoutMs: config.REPLBRIDGE_COMMAND_TIMEOUT_MS,
 });
-
-// ─── Tool input schemas ────────────────────────────────────────────────────────
-
-const ListFilesInput = z.object({
-  path: z
-    .string()
-    .default(".")
-    .describe("Directory path relative to the workspace root. Defaults to workspace root."),
-  depth: z
-    .number()
-    .int()
-    .min(1)
-    .max(5)
-    .default(2)
-    .describe("How many directory levels deep to recurse. Max 5."),
-});
-
-const ReadFileInput = z.object({
-  path: z.string().describe("File path relative to the workspace root."),
-});
-
-const WriteFileInput = z.object({
-  path: z.string().describe("File path relative to the workspace root."),
-  content: z.string().describe("Complete new content to write to the file."),
-});
-
-const SoftDeleteFileInput = z.object({
-  path: z
-    .string()
-    .describe(
-      "File path relative to the workspace root. The file is moved to .replbridge/trash — NOT permanently deleted."
-    ),
-});
-
-const RunCommandInput = z.object({
-  command: z
-    .string()
-    .describe(
-      "The exact command to run. Must be on the Workspace Agent's allowlist. " +
-        "Use list_allowed_commands first to see what is permitted."
-    ),
-});
-
-// ─── Tool definitions ──────────────────────────────────────────────────────────
-
-const TOOLS = [
-  {
-    name: "workspace_status",
-    description:
-      "Get the current status of the Replit workspace: working directory, Node version, " +
-      "detected project stack (Node/Python/Static HTML), whether git is initialized, and the current branch. " +
-      "Use this first when connecting to a new workspace or when you need to understand the project type.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "list_files",
-    description:
-      "List files and folders in the Replit workspace. Sensitive paths (like .env, node_modules, .git) " +
-      "are automatically hidden. Use this to understand the project structure before reading or editing files.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        path: {
-          type: "string",
-          description: "Directory path to list. Defaults to workspace root.",
-          default: ".",
-        },
-        depth: {
-          type: "number",
-          description: "Recursion depth (1-5). Defaults to 2.",
-          default: 2,
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: "read_file",
-    description:
-      "Read the contents of a file in the Replit workspace. " +
-      "Sensitive files (.env, secrets, etc.) are blocked. Files larger than 500KB are rejected.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        path: { type: "string", description: "File path relative to workspace root." },
-      },
-      required: ["path"],
-    },
-  },
-  {
-    name: "write_file",
-    description:
-      "Write content to a file in the Replit workspace. " +
-      "If the file already exists, a timestamped snapshot is automatically saved to .replbridge/snapshots/ before overwriting. " +
-      "This is the safe way to edit code — you can always recover the previous version from snapshots.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        path: { type: "string", description: "File path relative to workspace root." },
-        content: { type: "string", description: "Complete new file content." },
-      },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "soft_delete_file",
-    description:
-      "Safely remove a file from the Replit workspace by moving it to .replbridge/trash. " +
-      "The file is NOT permanently deleted and can be recovered. " +
-      "Use this instead of asking to 'delete' a file — permanent deletion is not allowed.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        path: { type: "string", description: "File path relative to workspace root." },
-      },
-      required: ["path"],
-    },
-  },
-  {
-    name: "list_allowed_commands",
-    description:
-      "Get the list of commands that are permitted to run in the workspace. " +
-      "Always check this before calling run_command to avoid errors.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "run_command",
-    description:
-      "Run a command in the Replit workspace. Only allowlisted commands are permitted — " +
-      "use list_allowed_commands first to see what is allowed. " +
-      "Returns stdout, stderr, exit code, and duration. " +
-      "Good for: npm install, npm run build, npm run test, git status, python -m pytest.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        command: {
-          type: "string",
-          description: "The exact command to run (must be on the allowlist).",
-        },
-      },
-      required: ["command"],
-    },
-  },
-  {
-    name: "git_status",
-    description:
-      "Get the git status of the Replit workspace — which files have been modified, staged, or are untracked. " +
-      "Use this to understand what has changed before committing or to verify your edits landed.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "git_diff",
-    description:
-      "Get the git diff of the Replit workspace — shows the actual line-by-line changes not yet staged. " +
-      "Use this to review what you have changed before deciding to commit or revert.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-] as const;
 
 // ─── Server setup ──────────────────────────────────────────────────────────────
 
-const server = new Server(
+const server = new McpServer(
+  { name: "replbridge", title: "ReplBridge", version: PACKAGE_VERSION },
   {
-    name: "replbridge",
-    version: "0.1.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
+    instructions:
+      "ReplBridge gives you safe access to a Replit project through a Workspace Agent. " +
+      "Start with workspace_status and list_files to orient yourself. Always read_file before " +
+      "write_file so you don't clobber content, and write the COMPLETE file contents. " +
+      "Every overwrite is snapshotted and deletes go to a trash folder, so edits are recoverable. " +
+      "Only allowlisted commands can run: call list_allowed_commands before run_command. " +
+      "Use git_diff to review your changes when you're done.",
   }
 );
 
-// ─── List tools handler ────────────────────────────────────────────────────────
+/** Convert an agent response to an MCP tool result, flagging failures. */
+function toResult(response: AgentResponse): CallToolResult {
+  return {
+    content: [{ type: "text", text: formatAgentResponse(response) }],
+    ...(response.ok ? {} : { isError: true }),
+  };
+}
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS,
-}));
+// ─── Tools ─────────────────────────────────────────────────────────────────────
 
-// ─── Call tool handler ─────────────────────────────────────────────────────────
+server.registerTool(
+  "workspace_status",
+  {
+    title: "Workspace status",
+    description:
+      "Get the current status of the Replit workspace: workspace root, Node version, " +
+      "detected project stack (Node/Python/Static HTML), whether git is initialized, and the current branch. " +
+      "Use this first when connecting to a new workspace or when you need to understand the project type.",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async () => toResult(await agent.status())
+);
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+server.registerTool(
+  "list_files",
+  {
+    title: "List files",
+    description:
+      "List files and folders in the Replit workspace. Directories end with '/'. Sensitive paths " +
+      "(like .env, node_modules, .git) and build output are hidden. Use this to understand the " +
+      "project structure before reading or editing files.",
+    inputSchema: {
+      path: z
+        .string()
+        .default(".")
+        .describe("Directory path relative to the workspace root. Defaults to the workspace root."),
+      depth: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .default(2)
+        .describe("How many directory levels deep to recurse (1-5). Defaults to 2."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ path, depth }) => toResult(await agent.listFiles(path, depth))
+);
 
-  try {
-    switch (name) {
-      // ── workspace_status ─────────────────────────────────────────────────
-      case "workspace_status": {
-        const response = await agent.status();
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── list_files ───────────────────────────────────────────────────────
-      case "list_files": {
-        const input = ListFilesInput.parse(args ?? {});
-        const response = await agent.listFiles(input.path, input.depth);
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── read_file ────────────────────────────────────────────────────────
-      case "read_file": {
-        const input = ReadFileInput.parse(args);
-        const response = await agent.readFile(input.path);
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── write_file ───────────────────────────────────────────────────────
-      case "write_file": {
-        const input = WriteFileInput.parse(args);
-        const response = await agent.writeFile(input.path, input.content);
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── soft_delete_file ─────────────────────────────────────────────────
-      case "soft_delete_file": {
-        const input = SoftDeleteFileInput.parse(args);
-        const response = await agent.softDeleteFile(input.path);
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── list_allowed_commands ─────────────────────────────────────────────
-      case "list_allowed_commands": {
-        const response = await agent.listAllowedCommands();
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── run_command ───────────────────────────────────────────────────────
-      case "run_command": {
-        const input = RunCommandInput.parse(args);
-        const response = await agent.runCommand(input.command);
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── git_status ────────────────────────────────────────────────────────
-      case "git_status": {
-        const response = await agent.gitStatus();
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      // ── git_diff ──────────────────────────────────────────────────────────
-      case "git_diff": {
-        const response = await agent.gitDiff();
-        return { content: [{ type: "text", text: formatAgentResponse(response) }] };
-      }
-
-      default:
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Unknown tool: ${name}. Available tools: ${TOOLS.map((t) => t.name).join(", ")}`,
-            },
-          ],
-          isError: true,
-        };
+server.registerTool(
+  "read_file",
+  {
+    title: "Read file",
+    description:
+      "Read the contents of a text file in the Replit workspace. " +
+      "Sensitive files (.env, secrets, etc.) are blocked. Files larger than 500KB and binary files are rejected.",
+    inputSchema: {
+      path: z.string().min(1).describe("File path relative to the workspace root."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ path }) => {
+    const response = await agent.readFile(path);
+    // Return raw file contents rather than JSON-escaped text: easier for the
+    // model to read and edit accurately.
+    if (response.ok && response.data) {
+      return { content: [{ type: "text", text: response.data.content }] };
     }
-  } catch (err) {
-    // Handle Zod validation errors cleanly
-    if (err instanceof z.ZodError) {
-      const issues = err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-      return {
-        content: [{ type: "text", text: `Invalid input for tool "${name}": ${issues}` }],
-        isError: true,
-      };
-    }
-
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [{ type: "text", text: `Unexpected error in tool "${name}": ${message}` }],
-      isError: true,
-    };
+    return toResult(response);
   }
-});
+);
+
+server.registerTool(
+  "write_file",
+  {
+    title: "Write file",
+    description:
+      "Create or overwrite a file in the Replit workspace with the COMPLETE new contents " +
+      "(this is not a patch — include the whole file). Parent directories are created as needed. " +
+      "If the file already exists, a timestamped snapshot is saved to .replbridge/snapshots/ first, " +
+      "so the previous version can always be recovered.",
+    inputSchema: {
+      path: z.string().min(1).describe("File path relative to the workspace root."),
+      content: z.string().describe("Complete new content to write to the file."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ path, content }) => toResult(await agent.writeFile(path, content))
+);
+
+server.registerTool(
+  "soft_delete_file",
+  {
+    title: "Soft-delete file",
+    description:
+      "Safely remove a file or folder from the Replit workspace by moving it to .replbridge/trash. " +
+      "It is NOT permanently deleted and can be recovered. Permanent deletion is not available.",
+    inputSchema: {
+      path: z.string().min(1).describe("File path relative to the workspace root."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async ({ path }) => toResult(await agent.softDeleteFile(path))
+);
+
+server.registerTool(
+  "list_allowed_commands",
+  {
+    title: "List allowed commands",
+    description:
+      "Get the exact command strings that are permitted to run in the workspace, plus the per-command timeout. " +
+      "Always check this before calling run_command.",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async () => toResult(await agent.listAllowedCommands())
+);
+
+server.registerTool(
+  "run_command",
+  {
+    title: "Run command",
+    description:
+      "Run an allowlisted command in the workspace root (e.g. 'npm install', 'npm test', 'python -m pytest'). " +
+      "The command must match an allowlist entry exactly — call list_allowed_commands first. " +
+      "There is no shell: pipes, redirects, '&&' and env vars are not supported. " +
+      "Returns stdout, stderr, exit code, and duration. Long-running commands (like dev servers) are " +
+      "killed at the timeout and their output so far is returned.",
+    inputSchema: {
+      command: z.string().min(1).describe("The exact command to run (must be on the allowlist)."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async ({ command }) => {
+    const response = await agent.runCommand(command);
+    const result = toResult(response);
+    // A command that ran but exited non-zero is still a failure from Claude's POV.
+    const data = response.data as { exitCode?: number } | undefined;
+    if (response.ok && data?.exitCode !== 0) result.isError = true;
+    return result;
+  }
+);
+
+server.registerTool(
+  "git_status",
+  {
+    title: "Git status",
+    description:
+      "Get the git status of the Replit workspace — which files are modified, staged, or untracked. " +
+      "Use this to see what has changed or to verify your edits landed.",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async () => toResult(await agent.gitStatus())
+);
+
+server.registerTool(
+  "git_diff",
+  {
+    title: "Git diff",
+    description:
+      "Get the line-by-line git diff of the Replit workspace. By default shows unstaged changes; " +
+      "set staged=true to see staged changes. Use this to review your edits.",
+    inputSchema: {
+      staged: z.boolean().default(false).describe("Show staged changes instead of unstaged ones."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ staged }) => toResult(await agent.gitDiff(staged))
+);
 
 // ─── Start ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write("[ReplBridge] MCP server running on stdio\n");
+  process.stderr.write(
+    `[ReplBridge] MCP server v${PACKAGE_VERSION} running on stdio → ${config.REPLBRIDGE_AGENT_URL}\n`
+  );
+
+  // Non-blocking connectivity check so problems show up in the MCP client's
+  // logs immediately instead of on the first tool call.
+  agent.status().then((res) => {
+    if (res.ok) {
+      process.stderr.write("[ReplBridge] Connected to Workspace Agent ✓\n");
+    } else {
+      process.stderr.write(`[ReplBridge] Warning: ${formatAgentResponse(res)}\n`);
+    }
+  });
 }
 
 main().catch((err) => {

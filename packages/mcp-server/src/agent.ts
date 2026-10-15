@@ -7,130 +7,151 @@
  */
 
 export interface AgentConfig {
-    agentUrl: string;
-    projectToken: string;
+  agentUrl: string;
+  projectToken: string;
+  /** Timeout for normal requests (ms). */
+  timeoutMs: number;
+  /** Timeout for run_command, which can legitimately take minutes (ms). */
+  commandTimeoutMs: number;
 }
 
 export interface AgentResponse<T = unknown> {
-    ok: boolean;
-    data?: T;
-    error?: {
-      code: string;
-      message: string;
-    };
+  ok: boolean;
+  data?: T;
+  error?: {
+    code: string;
+    message: string;
+  };
 }
 
-/** Default request timeout in milliseconds (overridable via REPLBRIDGE_TIMEOUT_MS). */
-const DEFAULT_TIMEOUT_MS = 30_000;
-const TIMEOUT_MS = (() => {
-    const raw = process.env.REPLBRIDGE_TIMEOUT_MS;
-    const parsed = raw ? parseInt(raw, 10) : NaN;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
-})();
-
 export class AgentClient {
-    private baseUrl: string;
-    private headers: Record<string, string>;
+  private baseUrl: string;
+  private headers: Record<string, string>;
+  private timeoutMs: number;
+  private commandTimeoutMs: number;
 
   constructor(config: AgentConfig) {
-        this.baseUrl = config.agentUrl.replace(/\/$/, "");
-        this.headers = {
-                Authorization: `Bearer ${config.projectToken}`,
-                "Content-Type": "application/json",
-        };
+    this.baseUrl = config.agentUrl.replace(/\/+$/, "");
+    this.headers = {
+      Authorization: `Bearer ${config.projectToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    this.timeoutMs = config.timeoutMs;
+    this.commandTimeoutMs = config.commandTimeoutMs;
   }
 
   private async request<T>(
-        method: "GET" | "POST",
-        path: string,
-        body?: unknown
-      ): Promise<AgentResponse<T>> {
-        const url = `${this.baseUrl}${path}`;
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    timeoutMs = this.timeoutMs
+  ): Promise<AgentResponse<T>> {
+    const url = `${this.baseUrl}${path}`;
 
-      // Abort the request if the agent doesn't respond within TIMEOUT_MS.
-      // Without this, Claude Desktop hangs indefinitely when the agent is unreachable.
-      const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      try {
-              const res = await fetch(url, {
-                        method,
-                        headers: this.headers,
-                        signal: controller.signal,
-                        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-              });
-
-          const json = (await res.json()) as AgentResponse<T>;
-              return json;
-      } catch (err) {
-              const isAbort =
-                        (err instanceof Error && err.name === "AbortError") ||
-                        (err as { code?: string })?.code === "ABORT_ERR";
-              const message =
-                        err instanceof Error ? err.message : String(err);
-              return {
-                        ok: false,
-                        error: {
-                                    code: isAbort ? "AGENT_TIMEOUT" : "AGENT_UNREACHABLE",
-                                    message: isAbort
-                                      ? `Workspace Agent at ${this.baseUrl} did not respond within ${TIMEOUT_MS}ms.`
-                                                  : `Could not reach the Workspace Agent at ${this.baseUrl}: ${message}`,
-                        },
-              };
-      } finally {
-              clearTimeout(timer);
+    let res: Response;
+    try {
+      // Abort if the agent doesn't respond in time. Without this, Claude
+      // hangs indefinitely when the agent is unreachable.
+      res = await fetch(url, {
+        method,
+        headers: this.headers,
+        signal: AbortSignal.timeout(timeoutMs),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch (err) {
+      const name = (err as Error)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        return failure(
+          "AGENT_TIMEOUT",
+          `Workspace Agent at ${this.baseUrl} did not respond within ${timeoutMs}ms.`
+        );
       }
+      const cause = (err as { cause?: { code?: string; message?: string } })?.cause;
+      const detail = cause?.code ?? cause?.message ?? (err as Error)?.message ?? String(err);
+      return failure(
+        "AGENT_UNREACHABLE",
+        `Could not reach the Workspace Agent at ${this.baseUrl} (${detail}). ` +
+          `Is the agent running, and is REPLBRIDGE_AGENT_URL correct?`
+      );
+    }
+
+    const text = await res.text();
+    try {
+      const json = JSON.parse(text) as AgentResponse<T>;
+      if (typeof json === "object" && json !== null && typeof json.ok === "boolean") {
+        return json;
+      }
+    } catch {
+      /* fall through */
+    }
+
+    // Not a ReplBridge response — usually Replit's "waking up" / 404 HTML page,
+    // or REPLBRIDGE_AGENT_URL pointing at the wrong server.
+    const looksLikeHtml = /^\s*</.test(text);
+    return failure(
+      "AGENT_BAD_RESPONSE",
+      `Got HTTP ${res.status} from ${url} but it was not a ReplBridge JSON response` +
+        (looksLikeHtml
+          ? " (received an HTML page — the Repl may be asleep/starting, or the URL points at the wrong app)."
+          : ".") +
+        ` First bytes: ${JSON.stringify(text.slice(0, 120))}`
+    );
   }
 
   // ─── Health ─────────────────────────────────────────────────────────────────
 
   async health() {
-        return this.request("GET", "/health");
+    return this.request("GET", "/health");
   }
 
   // ─── Workspace status ───────────────────────────────────────────────────────
 
   async status() {
-        return this.request("GET", "/status");
+    return this.request("GET", "/status");
   }
 
   // ─── Files ──────────────────────────────────────────────────────────────────
 
   async listFiles(path: string, depth?: number) {
-        return this.request("POST", "/files/list", { path, depth });
+    return this.request("POST", "/files/list", { path, depth });
   }
 
   async readFile(path: string) {
-        return this.request("POST", "/files/read", { path });
+    return this.request<{ path: string; content: string }>("POST", "/files/read", { path });
   }
 
-  async writeFile(path: string, contents: string) {
-        return this.request("POST", "/files/write", { path, contents });
+  async writeFile(path: string, content: string) {
+    return this.request("POST", "/files/write", { path, content });
   }
 
   async softDeleteFile(path: string) {
-        return this.request("POST", "/files/delete-soft", { path });
+    return this.request("POST", "/files/delete-soft", { path });
   }
 
   // ─── Commands ───────────────────────────────────────────────────────────────
 
   async listAllowedCommands() {
-        return this.request("GET", "/commands/allowed");
+    return this.request("GET", "/commands/allowed");
   }
 
   async runCommand(command: string) {
-        return this.request("POST", "/commands/run", { command });
+    return this.request("POST", "/commands/run", { command }, this.commandTimeoutMs);
   }
 
   // ─── Git ────────────────────────────────────────────────────────────────────
 
   async gitStatus() {
-        return this.request("GET", "/git/status");
+    return this.request("GET", "/git/status");
   }
 
-  async gitDiff() {
-        return this.request("GET", "/git/diff");
+  async gitDiff(staged = false) {
+    return this.request("GET", staged ? "/git/diff?staged=true" : "/git/diff");
   }
+}
+
+function failure(code: string, message: string): AgentResponse<never> {
+  return { ok: false, error: { code, message } };
 }
 
 /**
@@ -139,8 +160,8 @@ export class AgentClient {
  * On failure, returns a clear error message.
  */
 export function formatAgentResponse(response: AgentResponse): string {
-    if (response.ok) {
-          return JSON.stringify(response.data, null, 2);
-    }
-    return `Error [${response.error?.code ?? "UNKNOWN"}]: ${response.error?.message ?? "Unknown error"}`;
+  if (response.ok) {
+    return JSON.stringify(response.data, null, 2);
+  }
+  return `Error [${response.error?.code ?? "UNKNOWN"}]: ${response.error?.message ?? "Unknown error"}`;
 }

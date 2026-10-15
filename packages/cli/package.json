@@ -18,10 +18,10 @@
     "prompts": "^2.4.2"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.20.5",
     "@types/prompts": "^2.4.9",
-    "tsx": "^4.15.0",
-    "typescript": "^5.4.5"
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   },
   "author": "Alex Santos",
   "license": "MIT",
@@ -31,5 +31,8 @@
     "replit",
     "cli",
     "installer"
-  ]
+  ],
+  "engines": {
+    "node": ">=20.12"
+  }
 }
