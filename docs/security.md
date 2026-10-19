@@ -8,31 +8,33 @@ ReplBridge gives Claude **controlled developer powers**, not unrestricted system
 
 ## What Claude CAN do
 
-| Action | Details |
-|---|---|
-| Read files | Any non-blocked text file, max 500 KB |
-| List files | Recursive listing, sensitive paths hidden, max 2,000 entries |
-| Write files | Any non-blocked path; the previous version is snapshotted first |
-| Soft-delete files | Files go to `.replbridge/trash`, never permanently deleted |
-| Run allowed commands | Exact allowlist only, no shell, killed at a timeout |
-| Check git status/diff | Read-only git operations |
+| Action                | Details                                                              |
+| --------------------- | -------------------------------------------------------------------- |
+| Read files            | Any non-blocked text file, max 500 KB                                |
+| List files            | Recursive listing, sensitive paths hidden, max 2,000 entries         |
+| Write and edit files  | Any non-blocked path; the previous version is snapshotted first      |
+| Search files          | Text search across non-blocked, non-binary files ≤500 KB             |
+| Restore snapshots     | Roll a file back to a saved version (the current one is saved first) |
+| Soft-delete files     | Files go to `.replbridge/trash`, never permanently deleted           |
+| Run allowed commands  | Exact allowlist only, no shell, killed at a timeout                  |
+| Check git status/diff | Read-only git operations                                             |
 
 ## What Claude CANNOT do
 
-| Action | Why |
-|---|---|
-| Read or write `.env*` or secrets | Blocked by name and pattern |
-| Escape the workspace | `..` and absolute paths are rejected, and **symlinks are resolved** before the check, so a link to `/etc` doesn't work |
-| Edit the agent itself | The agent's install folder is blocked when it's inside the workspace |
-| Run arbitrary shell commands | Strict allowlist, executed with `spawn` (no shell, so `;`, `&&` and pipes have no effect) |
-| See the project token from a command | `REPLBRIDGE_PROJECT_TOKEN` is removed from every command's environment |
-| Delete files permanently | Soft-delete only |
-| Commit or push | git write operations aren't on the allowlist |
-| Hang the agent | Commands are killed after `REPLBRIDGE_COMMAND_TIMEOUT_MS`, output is capped at 200 KB per stream |
+| Action                               | Why                                                                                                                    |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Read or write `.env*` or secrets     | Blocked by name and pattern                                                                                            |
+| Escape the workspace                 | `..` and absolute paths are rejected, and **symlinks are resolved** before the check, so a link to `/etc` doesn't work |
+| Edit the agent itself                | The agent's install folder is blocked when it's inside the workspace                                                   |
+| Run arbitrary shell commands         | Strict allowlist, executed with `spawn` (no shell, so `;`, `&&` and pipes have no effect)                              |
+| See the project token from a command | `REPLBRIDGE_PROJECT_TOKEN` is removed from every command's environment                                                 |
+| Delete files permanently             | Soft-delete only                                                                                                       |
+| Commit or push                       | git write operations aren't on the allowlist                                                                           |
+| Hang the agent                       | Commands are killed after `REPLBRIDGE_COMMAND_TIMEOUT_MS`, output is capped at 200 KB per stream                       |
 
 ## Know the limits: allowlisted commands run project code
 
-The allowlist controls *which* commands run, not *what they do*. `npm test`, `npm run build`, `python main.py` and the other entries execute **your project's own scripts**, and Claude can edit those files with `write_file`. A determined (or confused) model could therefore write a script and then run it via an allowlisted command.
+The allowlist controls _which_ commands run, not _what they do_. `npm test`, `npm run build`, `python main.py` and the other entries execute **your project's own scripts**, and Claude can edit those files with `write_file`. A determined (or confused) model could therefore write a script and then run it via an allowlisted command.
 
 In practice this means:
 
@@ -50,7 +52,7 @@ In practice this means:
 
 ## Snapshots
 
-Every time Claude overwrites a file, a copy of the **previous version** is saved to `.replbridge/snapshots/<path>__<timestamp>` first. Claude can't read or modify `.replbridge/`, so snapshots can't be tampered with through ReplBridge.
+Every time Claude writes, edits or restores a file, a copy of the **previous version** is saved to `.replbridge/snapshots/<path>__<timestamp>` first. Claude can list snapshots and restore one onto the file it came from (`list_snapshots` / `restore_snapshot`), but it can't read, modify or delete `.replbridge/` directly, so snapshots can't be tampered with through ReplBridge.
 
 ## Blocklist
 

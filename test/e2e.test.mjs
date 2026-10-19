@@ -70,7 +70,10 @@ async function connectMcp(env) {
 
 async function call(name, args = {}, c = client) {
   const res = await c.callTool({ name, arguments: args });
-  return { isError: res.isError === true, text: res.content.map((p) => p.text).join("\n") };
+  return {
+    isError: res.isError === true,
+    text: res.content.map((p) => p.text).join("\n"),
+  };
 }
 
 const json = (r) => JSON.parse(r.text);
@@ -89,8 +92,8 @@ before(async () => {
         scripts: {
           test: "node -e \"console.log('tests-ok')\"",
           lint: "node -e \"console.log('TOKEN=' + process.env.REPLBRIDGE_PROJECT_TOKEN)\"",
-          build: "node -e \"process.exit(3)\"",
-          dev: "node -e \"setInterval(() => {}, 1000)\"",
+          build: 'node -e "process.exit(3)"',
+          dev: 'node -e "setInterval(() => {}, 1000)"',
         },
       },
       null,
@@ -127,7 +130,10 @@ before(async () => {
   });
   await waitForHealth(agentUrl);
 
-  client = await connectMcp({ REPLBRIDGE_AGENT_URL: agentUrl, REPLBRIDGE_PROJECT_TOKEN: TOKEN });
+  client = await connectMcp({
+    REPLBRIDGE_AGENT_URL: agentUrl,
+    REPLBRIDGE_PROJECT_TOKEN: TOKEN,
+  });
 });
 
 after(async () => {
@@ -142,12 +148,16 @@ after(async () => {
 test("exposes all tools with input schemas", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [
+    "edit_file",
     "git_diff",
     "git_status",
     "list_allowed_commands",
     "list_files",
+    "list_snapshots",
     "read_file",
+    "restore_snapshot",
     "run_command",
+    "search_files",
     "soft_delete_file",
     "workspace_status",
     "write_file",
@@ -189,14 +199,20 @@ test("read_file returns raw contents", async () => {
 });
 
 test("write_file creates new files (and parent dirs)", async () => {
-  const r = await call("write_file", { path: "new/dir/file.txt", content: "fresh" });
+  const r = await call("write_file", {
+    path: "new/dir/file.txt",
+    content: "fresh",
+  });
   assert.equal(r.isError, false, r.text);
   assert.equal(json(r).created, true);
   assert.equal(fs.readFileSync(path.join(workspace, "new/dir/file.txt"), "utf8"), "fresh");
 });
 
 test("write_file snapshots the previous version before overwriting", async () => {
-  const r = await call("write_file", { path: "hello.txt", content: "updated\n" });
+  const r = await call("write_file", {
+    path: "hello.txt",
+    content: "updated\n",
+  });
   assert.equal(r.isError, false, r.text);
   const data = json(r);
   assert.equal(data.created, false);
@@ -218,6 +234,130 @@ test("missing files return FILE_NOT_FOUND as an error", async () => {
   const r = await call("read_file", { path: "nope.txt" });
   assert.equal(r.isError, true);
   assert.match(r.text, /FILE_NOT_FOUND/);
+});
+
+// ─── Edit / search / snapshots ────────────────────────────────────────────────
+
+test("edit_file replaces a unique match and snapshots first", async () => {
+  fs.writeFileSync(path.join(workspace, "edit.js"), "const a = 1;\nconst b = 2;\n");
+  const r = await call("edit_file", {
+    path: "edit.js",
+    old_text: "const b = 2;",
+    new_text: "const b = 3;",
+  });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(json(r).replacements, 1);
+  assert.equal(fs.readFileSync(path.join(workspace, "edit.js"), "utf8"), "const a = 1;\nconst b = 3;\n");
+  assert.equal(
+    fs.readFileSync(path.join(workspace, json(r).snapshot), "utf8"),
+    "const a = 1;\nconst b = 2;\n"
+  );
+});
+
+test("edit_file refuses missing or ambiguous matches", async () => {
+  fs.writeFileSync(path.join(workspace, "dup.txt"), "x\nx\n");
+  const missing = await call("edit_file", {
+    path: "dup.txt",
+    old_text: "nope",
+    new_text: "y",
+  });
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /TEXT_NOT_FOUND/);
+
+  const ambiguous = await call("edit_file", {
+    path: "dup.txt",
+    old_text: "x",
+    new_text: "y",
+  });
+  assert.equal(ambiguous.isError, true);
+  assert.match(ambiguous.text, /AMBIGUOUS_MATCH/);
+  assert.equal(fs.readFileSync(path.join(workspace, "dup.txt"), "utf8"), "x\nx\n");
+
+  const all = await call("edit_file", {
+    path: "dup.txt",
+    old_text: "x",
+    new_text: "$&y",
+    replace_all: true,
+  });
+  assert.equal(all.isError, false, all.text);
+  assert.equal(json(all).replacements, 2);
+  assert.equal(fs.readFileSync(path.join(workspace, "dup.txt"), "utf8"), "$&y\n$&y\n");
+});
+
+test("edit_file respects the blocklist", async () => {
+  const r = await call("edit_file", {
+    path: ".env",
+    old_text: "SECRET",
+    new_text: "X",
+  });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /BLOCKED_PATH/);
+});
+
+test("search_files finds matches and skips hidden paths", async () => {
+  fs.writeFileSync(path.join(workspace, "node_modules", "lib.js"), "needle\n");
+  fs.writeFileSync(path.join(workspace, "src", "find.js"), "// a Needle here\n");
+  const r = await call("search_files", { query: "needle" });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /src\/find\.js:1: \/\/ a Needle here/);
+  assert.ok(!r.text.includes("node_modules"), "node_modules must be skipped");
+  assert.ok(!r.text.includes("SECRET"), ".env must be skipped");
+
+  const cs = await call("search_files", {
+    query: "needle",
+    case_sensitive: true,
+    path: "src",
+  });
+  assert.match(cs.text, /^0 matches/);
+
+  const re = await call("search_files", { query: "N[e]+dle", regex: true });
+  assert.match(re.text, /find\.js/);
+
+  const bad = await call("search_files", { query: "(", regex: true });
+  assert.equal(bad.isError, true);
+});
+
+test("list_snapshots and restore_snapshot undo a change", async () => {
+  fs.writeFileSync(path.join(workspace, "undo.txt"), "v1\n");
+  await call("write_file", { path: "undo.txt", content: "v2\n" });
+  await call("write_file", { path: "undo.txt", content: "v3\n" });
+
+  const list = await call("list_snapshots", { path: "undo.txt" });
+  assert.equal(list.isError, false, list.text);
+  const { snapshots } = json(list);
+  assert.equal(snapshots.length, 2);
+  const oldest = snapshots[snapshots.length - 1].snapshot;
+  assert.equal(fs.readFileSync(path.join(workspace, ".replbridge/snapshots", oldest), "utf8"), "v1\n");
+
+  const restore = await call("restore_snapshot", {
+    path: "undo.txt",
+    snapshot: oldest,
+  });
+  assert.equal(restore.isError, false, restore.text);
+  assert.equal(fs.readFileSync(path.join(workspace, "undo.txt"), "utf8"), "v1\n");
+  // The version we replaced (v3) was itself snapshotted.
+  const backup = json(restore).previousVersionSnapshot;
+  assert.equal(fs.readFileSync(path.join(workspace, backup), "utf8"), "v3\n");
+
+  const all = json(await call("list_snapshots"));
+  assert.ok(all.snapshots.length >= 3);
+});
+
+test("restore_snapshot rejects bad ids and mismatched files", async () => {
+  const traversal = await call("restore_snapshot", {
+    path: "undo.txt",
+    snapshot: "../../.env",
+  });
+  assert.equal(traversal.isError, true);
+  assert.match(traversal.text, /SNAPSHOT_NOT_FOUND/);
+
+  const snap = json(await call("list_snapshots", { path: "undo.txt" })).snapshots[0].snapshot;
+  const mismatch = await call("restore_snapshot", {
+    path: "hello.txt",
+    snapshot: snap,
+  });
+  assert.equal(mismatch.isError, true);
+  assert.match(mismatch.text, /SNAPSHOT_MISMATCH/);
 });
 
 // ─── Security boundaries ──────────────────────────────────────────────────────
@@ -246,7 +386,10 @@ test("blocks symlink escapes on read, write, list and delete", async () => {
   assert.equal(read.isError, true);
   assert.match(read.text, /PATH_TRAVERSAL/);
 
-  const write = await call("write_file", { path: "escape/planted.txt", content: "x" });
+  const write = await call("write_file", {
+    path: "escape/planted.txt",
+    content: "x",
+  });
   assert.equal(write.isError, true);
   assert.ok(!fs.existsSync(path.join(outside, "planted.txt")));
 
@@ -320,7 +463,10 @@ test("git_status and git_diff reflect edits", async () => {
 // ─── Error handling ───────────────────────────────────────────────────────────
 
 test("wrong token yields UNAUTHORIZED", async () => {
-  const bad = await connectMcp({ REPLBRIDGE_AGENT_URL: agentUrl, REPLBRIDGE_PROJECT_TOKEN: "wrong-token-0123456789" });
+  const bad = await connectMcp({
+    REPLBRIDGE_AGENT_URL: agentUrl,
+    REPLBRIDGE_PROJECT_TOKEN: "wrong-token-0123456789",
+  });
   try {
     const r = await call("workspace_status", {}, bad);
     assert.equal(r.isError, true);
@@ -332,7 +478,10 @@ test("wrong token yields UNAUTHORIZED", async () => {
 
 test("unreachable agent yields AGENT_UNREACHABLE", async () => {
   const port = await freePort(); // nothing listening here
-  const c = await connectMcp({ REPLBRIDGE_AGENT_URL: `http://127.0.0.1:${port}`, REPLBRIDGE_PROJECT_TOKEN: TOKEN });
+  const c = await connectMcp({
+    REPLBRIDGE_AGENT_URL: `http://127.0.0.1:${port}`,
+    REPLBRIDGE_PROJECT_TOKEN: TOKEN,
+  });
   try {
     const r = await call("workspace_status", {}, c);
     assert.equal(r.isError, true);

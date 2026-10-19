@@ -18,11 +18,7 @@ import { fail } from "../utils/respond.js";
 
 const expectedDigest = createHash("sha256").update(PROJECT_TOKEN).digest();
 
-export function requireAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers["authorization"];
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {

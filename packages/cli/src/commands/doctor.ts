@@ -68,15 +68,17 @@ export async function runDoctor(): Promise<void> {
   if (fs.existsSync(configPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      checks.push(
-        check("ReplBridge initialized", "ok", `Stack: ${config.stack ?? "unknown"}`)
-      );
+      checks.push(check("ReplBridge initialized", "ok", `Stack: ${config.stack ?? "unknown"}`));
     } catch {
       checks.push(check("ReplBridge initialized", "fail", ".replbridge/config.json is malformed"));
     }
   } else {
     checks.push(
-      check("ReplBridge initialized", "warn", "No .replbridge/config.json here (optional — run `replbridge init` to create one)")
+      check(
+        "ReplBridge initialized",
+        "warn",
+        "No .replbridge/config.json here (optional — run `replbridge init` to create one)"
+      )
     );
   }
 
@@ -90,19 +92,13 @@ export async function runDoctor(): Promise<void> {
       if (val && val !== "replace-with-a-secure-random-token") {
         checks.push(check("Project token set", "ok", "Found in .env"));
       } else {
-        checks.push(
-          check("Project token set", "fail", "REPLBRIDGE_PROJECT_TOKEN is not set in .env")
-        );
+        checks.push(check("Project token set", "fail", "REPLBRIDGE_PROJECT_TOKEN is not set in .env"));
       }
     } else {
-      checks.push(
-        check("Project token set", "warn", "REPLBRIDGE_PROJECT_TOKEN not found in .env")
-      );
+      checks.push(check("Project token set", "warn", "REPLBRIDGE_PROJECT_TOKEN not found in .env"));
     }
   } else {
-    checks.push(
-      check("Project token set", "warn", "No .env file found — token must be set in environment")
-    );
+    checks.push(check("Project token set", "warn", "No .env file found — token must be set in environment"));
   }
 
   // ── MCP server build ──────────────────────────────────────────────────────
@@ -137,12 +133,18 @@ export async function runDoctor(): Promise<void> {
       } else {
         checks.push(check("Workspace Agent reachable", "ok", agentUrl));
         if (!token) {
-          checks.push(check("Token accepted", "warn", "REPLBRIDGE_PROJECT_TOKEN not set — skipping auth check"));
+          checks.push(
+            check("Token accepted", "warn", "REPLBRIDGE_PROJECT_TOKEN not set — skipping auth check")
+          );
         } else {
           const status = await getJson(`${agentUrl}/status`, token);
           if (status.body?.ok === true) {
             checks.push(
-              check("Token accepted", "ok", `workspace ${status.body.data.workspaceRoot} (${status.body.data.stack})`)
+              check(
+                "Token accepted",
+                "ok",
+                `workspace ${status.body.data.workspaceRoot} (${status.body.data.stack})`
+              )
             );
           } else {
             checks.push(
@@ -152,9 +154,7 @@ export async function runDoctor(): Promise<void> {
         }
       }
     } catch (err) {
-      checks.push(
-        check("Workspace Agent reachable", "fail", `${agentUrl}: ${(err as Error).message}`)
-      );
+      checks.push(check("Workspace Agent reachable", "fail", `${agentUrl}: ${(err as Error).message}`));
     }
   }
 
@@ -165,9 +165,7 @@ export async function runDoctor(): Promise<void> {
     if (content.includes(".env") && content.includes(".replbridge/snapshots")) {
       checks.push(check(".gitignore configured", "ok"));
     } else {
-      checks.push(
-        check(".gitignore configured", "warn", ".env or .replbridge/snapshots not excluded")
-      );
+      checks.push(check(".gitignore configured", "warn", ".env or .replbridge/snapshots not excluded"));
     }
   } else {
     checks.push(check(".gitignore configured", "warn", "No .gitignore found"));
@@ -178,9 +176,7 @@ export async function runDoctor(): Promise<void> {
   if (major > 20 || (major === 20 && minor >= 12)) {
     checks.push(check(`Node.js ${process.version}`, "ok", "≥20.12 required"));
   } else {
-    checks.push(
-      check(`Node.js ${process.version}`, "fail", "ReplBridge requires Node.js ≥20.12")
-    );
+    checks.push(check(`Node.js ${process.version}`, "fail", "ReplBridge requires Node.js ≥20.12"));
   }
 
   // ── Print results ─────────────────────────────────────────────────────────

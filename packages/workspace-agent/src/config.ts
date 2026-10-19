@@ -64,10 +64,7 @@ export const HOST = process.env.HOST || "0.0.0.0";
 
 // ─── Commands ───────────────────────────────────────────────────────────────
 /** Commands are killed after this long (default 2 minutes). */
-export const COMMAND_TIMEOUT_MS = positiveInt(
-  process.env.REPLBRIDGE_COMMAND_TIMEOUT_MS,
-  120_000
-);
+export const COMMAND_TIMEOUT_MS = positiveInt(process.env.REPLBRIDGE_COMMAND_TIMEOUT_MS, 120_000);
 
 /** Max bytes of stdout / stderr returned per command (default 200 KB each). */
 export const MAX_OUTPUT_BYTES = 200 * 1024;

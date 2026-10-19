@@ -26,27 +26,37 @@ Your code
 
 Claude is powerful, but handing it unrestricted shell access to a codebase is risky. ReplBridge puts a small, auditable layer in between:
 
-| Without ReplBridge | With ReplBridge |
-|---|---|
-| Claude has full shell access | Claude can only run an explicit allowlist of commands |
-| Any file is fair game, including `.env` | Secrets, `.git`, `node_modules` and Replit config are blocked |
+| Without ReplBridge                                  | With ReplBridge                                                        |
+| --------------------------------------------------- | ---------------------------------------------------------------------- |
+| Claude has full shell access                        | Claude can only run an explicit allowlist of commands                  |
+| Any file is fair game, including `.env`             | Secrets, `.git`, `node_modules` and Replit config are blocked          |
 | `../../` or a symlink can reach outside the project | Every path is resolved (symlinks included) and jailed to the workspace |
-| An overwrite loses the old version | Every overwrite is snapshotted first |
-| Deletes are permanent | Deletes move files to a trash folder |
+| An overwrite loses the old version                  | Every change is snapshotted first and can be restored                  |
+| Deletes are permanent                               | Deletes move files to a trash folder                                   |
 
 ## Tools
 
-| Tool | What it does |
-|---|---|
-| `workspace_status` | Workspace root, Node version, detected stack, git branch |
-| `list_files` | Recursive listing; sensitive paths and build output hidden |
-| `read_file` | Read a text file (≤500 KB, secrets and binaries rejected) |
-| `write_file` | Create/overwrite a file — previous version snapshotted first |
-| `soft_delete_file` | Move a file to `.replbridge/trash` |
-| `list_allowed_commands` | Show the exact commands Claude may run |
-| `run_command` | Run an allowlisted command (no shell, with a timeout) |
-| `git_status` | `git status` |
-| `git_diff` | `git diff` (or `--staged`) |
+**13 tools** across five areas:
+
+| Area    | Tool                    | What it does                                                    |
+| ------- | ----------------------- | --------------------------------------------------------------- |
+| Explore | `workspace_status`      | Workspace root, Node version, detected stack, git branch        |
+|         | `list_files`            | Recursive listing; sensitive paths and build output hidden      |
+|         | `search_files`          | grep-style search (text or regex) with file and line numbers    |
+|         | `read_file`             | Read a text file (≤500 KB, secrets and binaries rejected)       |
+| Edit    | `edit_file`             | Targeted find-and-replace; refuses ambiguous or missing matches |
+|         | `write_file`            | Create or fully rewrite a file                                  |
+|         | `soft_delete_file`      | Move a file to `.replbridge/trash`                              |
+| Undo    | `list_snapshots`        | Previous versions of a file, newest first                       |
+|         | `restore_snapshot`      | Roll a file back (the current version is saved first)           |
+| Run     | `list_allowed_commands` | The exact commands Claude may run                               |
+|         | `run_command`           | Run an allowlisted command (no shell, with a timeout)           |
+| Review  | `git_status`            | `git status`                                                    |
+|         | `git_diff`              | `git diff` (or `--staged`)                                      |
+
+Every `write_file`, `edit_file` and `restore_snapshot` snapshots the previous version first, so nothing Claude does is unrecoverable.
+
+There is also a companion **[agent skill](skills/replbridge/SKILL.md)** that teaches Claude (or any SKILL.md-compatible agent) the best workflow for these tools. Copy `skills/replbridge` into `~/.claude/skills/`, or build an uploadable zip with `npm run package:skill`.
 
 ## Quick start
 
@@ -94,22 +104,23 @@ Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-**4. Verify** — `npm run doctor` checks your build, reaches the agent, and confirms the token. Then ask Claude: *"Use ReplBridge to check the workspace status."*
+**4. Verify** — `npm run doctor` checks your build, reaches the agent, and confirms the token. Then ask Claude: _"Use ReplBridge to check the workspace status."_
 
 The full walkthrough, including where to find your Repl's URL, is in **[docs/getting-started.md](docs/getting-started.md)**.
 
-> **Important:** run the agent in the Replit *workspace*, not as a Replit Deployment. A published app runs from a snapshot with its own filesystem, so Claude's edits would land in a throwaway copy instead of your code. See [troubleshooting](docs/troubleshooting.md#use-the-workspace-not-a-deployment).
+> **Important:** run the agent in the Replit _workspace_, not as a Replit Deployment. A published app runs from a snapshot with its own filesystem, so Claude's edits would land in a throwaway copy instead of your code. See [troubleshooting](docs/troubleshooting.md#use-the-workspace-not-a-deployment).
 
 ## Repository layout
 
-| Path | What it is |
-|---|---|
-| `packages/mcp-server` | The MCP server (stdio) that Claude talks to |
+| Path                       | What it is                                                              |
+| -------------------------- | ----------------------------------------------------------------------- |
+| `packages/mcp-server`      | The MCP server (stdio) that Claude talks to                             |
 | `packages/workspace-agent` | The Express agent that runs inside Replit and enforces all safety rules |
-| `packages/cli` | `replbridge init / doctor / uninstall` helper |
-| `packages/shared` | Placeholder for types shared between packages |
-| `test/` | End-to-end tests: real agent + real MCP server + official MCP client |
-| `docs/` | Getting started, security model, troubleshooting |
+| `packages/cli`             | `replbridge init / doctor / uninstall` helper                           |
+| `packages/shared`          | Placeholder for types shared between packages                           |
+| `skills/replbridge`        | Companion SKILL.md agent skill                                          |
+| `test/`                    | End-to-end tests: real agent + real MCP server + official MCP client    |
+| `docs/`                    | Getting started, security model, troubleshooting                        |
 
 ## Development
 
@@ -117,7 +128,9 @@ The full walkthrough, including where to find your Repl's URL, is in **[docs/get
 npm install
 npm run build      # compile all packages
 npm run typecheck
+npm run format     # format everything with Prettier (CI runs format:check)
 npm test           # builds, then runs the end-to-end suite
+npm run package:skill  # zip the agent skill into dist/replbridge-skill.zip
 npm run dev:agent  # agent with tsx (needs packages/workspace-agent/.env)
 npm run dev:mcp    # MCP server with tsx
 ```
@@ -134,6 +147,7 @@ npx @modelcontextprotocol/inspector node packages/mcp-server/dist/index.js
 - [Security model](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
 - [Contributing](.github/CONTRIBUTING.md)
 
 ## Licensing

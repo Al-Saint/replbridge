@@ -24,5 +24,14 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/al-saint/replbridge.git",
+    "directory": "packages/workspace-agent"
+  },
+  "homepage": "https://github.com/al-saint/replbridge#readme",
+  "bugs": {
+    "url": "https://github.com/al-saint/replbridge/issues"
   }
 }

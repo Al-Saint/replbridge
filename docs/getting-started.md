@@ -48,11 +48,11 @@ You'll paste this token in two places: Replit Secrets (step 3) and your MCP clie
    - Don't copy it to the project root: its `package.json` would clash with yours.
 3. In **Replit → Secrets**, add:
 
-   | Key | Value |
-   |---|---|
-   | `REPLBRIDGE_PROJECT_TOKEN` | the token from step 2 |
+   | Key                         | Value                    |
+   | --------------------------- | ------------------------ |
+   | `REPLBRIDGE_PROJECT_TOKEN`  | the token from step 2    |
    | `REPLBRIDGE_WORKSPACE_ROOT` | `/home/runner/workspace` |
-   | `PORT` *(optional)* | defaults to `3000` |
+   | `PORT` _(optional)_         | defaults to `3000`       |
 
 4. In the **Replit Shell**, run:
 
@@ -110,7 +110,7 @@ Edit your Claude Desktop config:
 
 Fully quit and restart Claude Desktop.
 
-*Alternative:* instead of the `env` block, you can put the two variables in `packages/mcp-server/.env`. The server finds it no matter which directory the client launches it from.
+_Alternative:_ instead of the `env` block, you can put the two variables in `packages/mcp-server/.env`. The server finds it no matter which directory the client launches it from.
 
 ## Step 5 — Verify
 
@@ -128,14 +128,24 @@ Use ReplBridge to list the files in my workspace.
 Use ReplBridge to run the tests.
 ```
 
+## Step 6 (optional) — Install the ReplBridge skill
+
+The repo includes an agent skill that teaches Claude the best way to use these tools: when to search, when to edit or rewrite, how to verify with tests, and how to undo. In Claude Code:
+
+```bash
+mkdir -p ~/.claude/skills && cp -r skills/replbridge ~/.claude/skills/
+```
+
+For other SKILL.md-compatible agents, or to upload it to a marketplace, run `npm run package:skill`. That produces `dist/replbridge-skill.zip`.
+
 ## Optional settings
 
-| Variable | Where | Default | Purpose |
-|---|---|---|---|
-| `REPLBRIDGE_EXTRA_COMMANDS` | Replit Secrets | — | Comma-separated extra exact commands to allow, e.g. `npx tsc --noEmit,npm run e2e` |
-| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | Replit Secrets | `120000` | Kill commands after this long |
-| `REPLBRIDGE_TIMEOUT_MS` | MCP client env | `30000` | Timeout for normal requests to the agent |
-| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | MCP client env | `150000` | How long the MCP server waits for `run_command` (keep it above the agent's) |
+| Variable                        | Where          | Default  | Purpose                                                                            |
+| ------------------------------- | -------------- | -------- | ---------------------------------------------------------------------------------- |
+| `REPLBRIDGE_EXTRA_COMMANDS`     | Replit Secrets | —        | Comma-separated extra exact commands to allow, e.g. `npx tsc --noEmit,npm run e2e` |
+| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | Replit Secrets | `120000` | Kill commands after this long                                                      |
+| `REPLBRIDGE_TIMEOUT_MS`         | MCP client env | `30000`  | Timeout for normal requests to the agent                                           |
+| `REPLBRIDGE_COMMAND_TIMEOUT_MS` | MCP client env | `150000` | How long the MCP server waits for `run_command` (keep it above the agent's)        |
 
 ## Next steps
 

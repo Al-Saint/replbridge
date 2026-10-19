@@ -1,11 +1,7 @@
 import fs from "fs";
 import path from "path";
 
-export type ProjectStack =
-  | "node"
-  | "python"
-  | "static-html"
-  | "unknown";
+export type ProjectStack = "node" | "python" | "static-html" | "unknown";
 
 export interface StackInfo {
   stack: ProjectStack;
@@ -17,8 +13,7 @@ export interface StackInfo {
  * Checks in priority order: Node → Python → Static HTML → Unknown.
  */
 export function detectStack(workspaceRoot: string): StackInfo {
-  const has = (file: string) =>
-    fs.existsSync(path.join(workspaceRoot, file));
+  const has = (file: string) => fs.existsSync(path.join(workspaceRoot, file));
 
   if (has("package.json")) {
     return { stack: "node", details: "Found package.json" };

@@ -13,6 +13,7 @@ The CLA is available at [.github/cla.md](./cla.md).
 ## Why a CLA?
 
 A CLA allows the project maintainer (Alex Santos) to:
+
 - Relicense contributions in the future (e.g., moving to a source-available license)
 - Protect against competing SaaS providers using the code against the project's interests
 - Keep the project sustainable long-term

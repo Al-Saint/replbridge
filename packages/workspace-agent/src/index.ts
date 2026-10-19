@@ -7,6 +7,7 @@ import { statusRouter } from "./routes/status.js";
 import { filesRouter } from "./routes/files.js";
 import { commandsRouter } from "./routes/commands.js";
 import { gitRouter } from "./routes/git.js";
+import { snapshotsRouter } from "./routes/snapshots.js";
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use(statusRouter);
 app.use(filesRouter);
 app.use(commandsRouter);
 app.use(gitRouter);
+app.use(snapshotsRouter);
 
 // ─── 404 handler ────────────────────────────────────────────────────────────
 app.use((_req, res) => {
@@ -57,26 +59,40 @@ app.use((_req, res) => {
 // Catches any thrown/rejected error from route handlers (Express 5 forwards
 // async rejections here too) so the process never crashes and clients always
 // get the standard { ok:false, error:{ code, message } } shape.
-app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
-  // Malformed JSON / oversized bodies from express.json()
-  if (err?.type === "entity.parse.failed") {
-    res.status(400).json({ ok: false, error: { code: "INVALID_JSON", message: "Request body is not valid JSON." } });
-    return;
-  }
-  if (err?.type === "entity.too.large") {
-    res.status(413).json({ ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "Request body exceeds 2MB." } });
-    return;
-  }
+app.use(
+  (err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
+    // Malformed JSON / oversized bodies from express.json()
+    if (err?.type === "entity.parse.failed") {
+      res.status(400).json({
+        ok: false,
+        error: {
+          code: "INVALID_JSON",
+          message: "Request body is not valid JSON.",
+        },
+      });
+      return;
+    }
+    if (err?.type === "entity.too.large") {
+      res.status(413).json({
+        ok: false,
+        error: {
+          code: "PAYLOAD_TOO_LARGE",
+          message: "Request body exceeds 2MB.",
+        },
+      });
+      return;
+    }
 
-  process.stderr.write(`[ReplBridge] Unhandled error: ${err?.stack ?? err}\n`);
-  res.status(500).json({
-    ok: false,
-    error: {
-      code: "INTERNAL_ERROR",
-      message: err?.message || "Internal server error",
-    },
-  });
-});
+    process.stderr.write(`[ReplBridge] Unhandled error: ${err?.stack ?? err}\n`);
+    res.status(500).json({
+      ok: false,
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err?.message || "Internal server error",
+      },
+    });
+  }
+);
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, HOST, () => {

@@ -40,14 +40,9 @@ function normalize(command: string): string {
   return command.trim().split(/\s+/).join(" ");
 }
 
-const extraCommands = (process.env.REPLBRIDGE_EXTRA_COMMANDS ?? "")
-  .split(",")
-  .map(normalize)
-  .filter(Boolean);
+const extraCommands = (process.env.REPLBRIDGE_EXTRA_COMMANDS ?? "").split(",").map(normalize).filter(Boolean);
 
-export const ALLOWED_COMMANDS: readonly string[] = [
-  ...new Set([...BUILTIN_COMMANDS, ...extraCommands]),
-];
+export const ALLOWED_COMMANDS: readonly string[] = [...new Set([...BUILTIN_COMMANDS, ...extraCommands])];
 
 /**
  * Check whether a command is on the allowlist.

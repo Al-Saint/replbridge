@@ -7,10 +7,13 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run build && node --test --test-concurrency=1 test/e2e.test.mjs",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "npm run format:check",
     "dev:agent": "npm run dev --workspace=packages/workspace-agent",
     "dev:mcp": "npm run dev --workspace=packages/mcp-server",
-    "doctor": "node packages/cli/dist/index.js doctor"
+    "doctor": "node packages/cli/dist/index.js doctor",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "package:skill": "node scripts/package-skill.mjs"
   },
   "workspaces": [
     "packages/workspace-agent",
@@ -31,5 +34,17 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/al-saint/replbridge.git"
+  },
+  "homepage": "https://github.com/al-saint/replbridge#readme",
+  "bugs": {
+    "url": "https://github.com/al-saint/replbridge/issues"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "prettier": "^3.9.10"
   }
 }

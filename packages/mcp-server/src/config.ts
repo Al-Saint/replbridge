@@ -28,8 +28,7 @@ for (const candidate of [path.resolve(process.cwd(), ".env"), path.join(PACKAGE_
   }
 }
 
-const positiveInt = (fallback: number) =>
-  z.coerce.number().int().positive().optional().default(fallback);
+const positiveInt = (fallback: number) => z.coerce.number().int().positive().optional().default(fallback);
 
 const ConfigSchema = z.object({
   REPLBRIDGE_AGENT_URL: z.url({

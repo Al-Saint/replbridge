@@ -76,6 +76,17 @@ The path resolves outside the workspace, either through `..` or through a symlin
 
 Only exact allowlisted commands run, and there's no shell, so `&&`, pipes and redirects don't work. Ask Claude to call `list_allowed_commands`, or add project-specific commands with the `REPLBRIDGE_EXTRA_COMMANDS` Secret (comma-separated), then restart the agent.
 
+## `TEXT_NOT_FOUND` or `AMBIGUOUS_MATCH` from `edit_file`
+
+`edit_file` only replaces text that matches **exactly**, including spaces and indentation, and only if it matches in exactly one place.
+
+- `TEXT_NOT_FOUND`: the file changed, or the text was copied inexactly. Have Claude re-read the file first.
+- `AMBIGUOUS_MATCH`: the text appears more than once. Include a few surrounding lines, or pass `replace_all: true` if every occurrence should change.
+
+## Undoing a change Claude made
+
+Ask Claude to "list the snapshots for `<file>` and restore the one from before your change". It uses `list_snapshots` and `restore_snapshot`. The version being replaced is saved first, so a restore can itself be undone. Files moved with `soft_delete_file` are in `.replbridge/trash/`. Restore those from the Replit file tree.
+
 ## A command "hangs" and then returns `timedOut: true`
 
 Long-running commands such as `npm run dev` are killed after `REPLBRIDGE_COMMAND_TIMEOUT_MS` (default 2 minutes), and the output so far is returned. This is expected for dev servers.

@@ -12,5 +12,14 @@
     "@types/node": "^22.20.5",
     "typescript": "^5.9.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/al-saint/replbridge.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://github.com/al-saint/replbridge#readme",
+  "bugs": {
+    "url": "https://github.com/al-saint/replbridge/issues"
+  }
 }

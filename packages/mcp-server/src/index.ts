@@ -2,7 +2,7 @@
 /**
  * ReplBridge MCP Server
  *
- * Exposes tools that let Claude safely inspect, edit, and run commands
+ * Exposes 13 tools that let Claude safely explore, search, edit, undo, and run commands
  * inside a Replit project via the ReplBridge Workspace Agent.
  *
  * Transport: stdio (compatible with Claude Desktop, Claude Code, and any
@@ -39,9 +39,11 @@ const server = new McpServer(
   {
     instructions:
       "ReplBridge gives you safe access to a Replit project through a Workspace Agent. " +
-      "Start with workspace_status and list_files to orient yourself. Always read_file before " +
-      "write_file so you don't clobber content, and write the COMPLETE file contents. " +
-      "Every overwrite is snapshotted and deletes go to a trash folder, so edits are recoverable. " +
+      "Start with workspace_status and list_files to orient yourself, and use search_files to find code. " +
+      "Always read_file before changing a file. Prefer edit_file for targeted changes; use write_file " +
+      "(with the COMPLETE contents) for new files or full rewrites. " +
+      "Every change is snapshotted and deletes go to a trash folder: list_snapshots and restore_snapshot " +
+      "undo a change. " +
       "Only allowlisted commands can run: call list_allowed_commands before run_command. " +
       "Use git_diff to review your changes when you're done.",
   }
@@ -132,9 +134,90 @@ server.registerTool(
       path: z.string().min(1).describe("File path relative to the workspace root."),
       content: z.string().describe("Complete new content to write to the file."),
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ path, content }) => toResult(await agent.writeFile(path, content))
+);
+
+server.registerTool(
+  "edit_file",
+  {
+    title: "Edit file",
+    description:
+      "Make a targeted change to a file by replacing an exact piece of text. old_text must match the file " +
+      "exactly (including whitespace and indentation) and must be unique unless replace_all is true — include " +
+      "a few surrounding lines to make it unique. The previous version is snapshotted first. " +
+      "Prefer this over write_file for changes to existing files.",
+    inputSchema: {
+      path: z.string().min(1).describe("File path relative to the workspace root."),
+      old_text: z.string().min(1).describe("The exact text to find (copy it from read_file)."),
+      new_text: z.string().describe("The text to replace it with. Use an empty string to delete it."),
+      replace_all: z
+        .boolean()
+        .default(false)
+        .describe("Replace every occurrence instead of requiring a unique match."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ path, old_text, new_text, replace_all }) =>
+    toResult(await agent.editFile(path, old_text, new_text, replace_all))
+);
+
+server.registerTool(
+  "search_files",
+  {
+    title: "Search files",
+    description:
+      "Search the workspace's text files for a string (or a regular expression) and get matching lines " +
+      "with file paths and line numbers — like grep. Sensitive paths, build output and binary files are skipped. " +
+      "Use this to find where something is defined or used before reading files.",
+    inputSchema: {
+      query: z
+        .string()
+        .min(1)
+        .describe("Text to search for (or a JavaScript regular expression if regex is true)."),
+      path: z.string().default(".").describe("Directory or file to search, relative to the workspace root."),
+      regex: z.boolean().default(false).describe("Treat query as a regular expression."),
+      case_sensitive: z.boolean().default(false).describe("Match case exactly."),
+      max_results: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(100)
+        .describe("Maximum matching lines to return."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ query, path, regex, case_sensitive, max_results }) => {
+    const response = await agent.searchFiles({
+      query,
+      path,
+      regex,
+      caseSensitive: case_sensitive,
+      maxResults: max_results,
+    });
+    if (!response.ok || !response.data) return toResult(response);
+    // Compact grep-style output is easier for the model to scan than JSON.
+    const { matches, filesSearched, truncated } = response.data;
+    const lines = matches.map((m) => `${m.file}:${m.line}: ${m.text}`);
+    const summary =
+      `${matches.length} match${matches.length === 1 ? "" : "es"} in ${filesSearched} files searched` +
+      (truncated ? " (results truncated — narrow the path or query)" : "");
+    return {
+      content: [{ type: "text", text: [summary, ...lines].join("\n") }],
+    };
+  }
 );
 
 server.registerTool(
@@ -147,9 +230,55 @@ server.registerTool(
     inputSchema: {
       path: z.string().min(1).describe("File path relative to the workspace root."),
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   },
   async ({ path }) => toResult(await agent.softDeleteFile(path))
+);
+
+server.registerTool(
+  "list_snapshots",
+  {
+    title: "List snapshots",
+    description:
+      "List saved snapshots (previous versions saved automatically before every write, edit or restore), " +
+      "newest first. Pass a path to see only that file's history. Use with restore_snapshot to undo a change.",
+    inputSchema: {
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Only list snapshots of this file (relative to the workspace root)."),
+      limit: z.number().int().min(1).max(200).default(50).describe("Maximum snapshots to return."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ path, limit }) => toResult(await agent.listSnapshots(path, limit))
+);
+
+server.registerTool(
+  "restore_snapshot",
+  {
+    title: "Restore snapshot",
+    description:
+      "Restore a file to a previous version from list_snapshots. The current version is snapshotted first, " +
+      "so a restore can itself be undone. Also works if the file has since been deleted.",
+    inputSchema: {
+      path: z.string().min(1).describe("File path to restore, relative to the workspace root."),
+      snapshot: z.string().min(1).describe("Snapshot id from list_snapshots (the `snapshot` field)."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ path, snapshot }) => toResult(await agent.restoreSnapshot(path, snapshot))
 );
 
 server.registerTool(
@@ -177,7 +306,12 @@ server.registerTool(
     inputSchema: {
       command: z.string().min(1).describe("The exact command to run (must be on the allowlist)."),
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
   },
   async ({ command }) => {
     const response = await agent.runCommand(command);

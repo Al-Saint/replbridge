@@ -5,19 +5,16 @@ import { z } from "zod";
 import { WORKSPACE_ROOT } from "../config.js";
 import { ok, fail } from "../utils/respond.js";
 import { checkAccess, isListingIgnored, MAX_READ_BYTES } from "../security/safePaths.js";
+import { snapshotFile, timestampedName, TRASH_DIR } from "../utils/snapshots.js";
 
 export const filesRouter = Router();
-
-const SNAPSHOTS_DIR = path.join(WORKSPACE_ROOT, ".replbridge", "snapshots");
-const TRASH_DIR = path.join(WORKSPACE_ROOT, ".replbridge", "trash");
 
 /** Max entries returned by /files/list so huge repos don't blow up the response. */
 const MAX_LIST_ENTRIES = 2000;
 
-/** "src/a/b.ts" → "src__a__b.ts__2026-01-01T00-00-00-000Z" */
-function timestampedName(relPath: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${relPath.split(path.sep).join("__")}__${timestamp}`;
+/** A NUL byte in the first 8KB is a reliable "this is binary" signal. */
+function isBinary(buf: Buffer): boolean {
+  return buf.subarray(0, 8192).includes(0);
 }
 
 // ─── POST /files/list ─────────────────────────────────────────────────────────
@@ -123,8 +120,7 @@ filesRouter.post("/files/read", (req: Request, res: Response) => {
   }
 
   const buf = fs.readFileSync(access.abs);
-  // A NUL byte in the first 8KB is a reliable "this is binary" signal.
-  if (buf.subarray(0, 8192).includes(0)) {
+  if (isBinary(buf)) {
     fail(res, "BINARY_FILE", "File appears to be binary and can't be returned as text.");
     return;
   }
@@ -167,10 +163,7 @@ filesRouter.post("/files/write", (req: Request, res: Response) => {
 
   // Create a snapshot before overwriting an existing file
   if (fileExists) {
-    fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
-    const snapshotFile = path.join(SNAPSHOTS_DIR, timestampedName(access.rel));
-    fs.copyFileSync(access.abs, snapshotFile);
-    snapshotPath = path.relative(WORKSPACE_ROOT, snapshotFile);
+    snapshotPath = snapshotFile(access.abs, access.rel);
   }
 
   // Ensure parent directory exists
@@ -183,6 +176,169 @@ filesRouter.post("/files/write", (req: Request, res: Response) => {
     bytes: Buffer.byteLength(content, "utf8"),
     snapshot: snapshotPath,
   });
+});
+
+// ─── POST /files/edit ─────────────────────────────────────────────────────────
+// Exact find-and-replace inside one file. Much cheaper than rewriting a whole
+// file, and safer: the edit fails unless old_text matches exactly.
+
+const EditSchema = z.object({
+  path: z.string().min(1),
+  oldText: z.string().min(1, "oldText must not be empty"),
+  newText: z.string(),
+  replaceAll: z.boolean().default(false),
+});
+
+filesRouter.post("/files/edit", (req: Request, res: Response) => {
+  const parsed = EditSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    fail(res, "INVALID_INPUT", parsed.error.issues[0].message);
+    return;
+  }
+
+  const { path: userPath, oldText, newText, replaceAll } = parsed.data;
+  const access = checkAccess(userPath);
+  if (!access.ok) {
+    fail(res, access.code, access.message, 403);
+    return;
+  }
+  if (!fs.existsSync(access.abs) || !fs.statSync(access.abs).isFile()) {
+    fail(res, "FILE_NOT_FOUND", `File not found: ${userPath}`, 404);
+    return;
+  }
+  if (fs.statSync(access.abs).size > MAX_READ_BYTES) {
+    fail(res, "FILE_TOO_LARGE", `File is larger than ${MAX_READ_BYTES / 1024}KB.`);
+    return;
+  }
+
+  const buf = fs.readFileSync(access.abs);
+  if (isBinary(buf)) {
+    fail(res, "BINARY_FILE", "File appears to be binary and can't be edited as text.");
+    return;
+  }
+  const original = buf.toString("utf8");
+
+  const occurrences = original.split(oldText).length - 1;
+  if (occurrences === 0) {
+    fail(
+      res,
+      "TEXT_NOT_FOUND",
+      "oldText was not found in the file. Re-read the file and copy the text exactly, including whitespace."
+    );
+    return;
+  }
+  if (occurrences > 1 && !replaceAll) {
+    fail(
+      res,
+      "AMBIGUOUS_MATCH",
+      `oldText matches ${occurrences} places. Include more surrounding lines to make it unique, or set replaceAll.`
+    );
+    return;
+  }
+
+  const updated = replaceAll
+    ? original.split(oldText).join(newText)
+    : original.replace(oldText, () => newText);
+  const snapshotPath = snapshotFile(access.abs, access.rel);
+  fs.writeFileSync(access.abs, updated, "utf8");
+
+  ok(res, {
+    path: userPath,
+    replacements: replaceAll ? occurrences : 1,
+    snapshot: snapshotPath,
+  });
+});
+
+// ─── POST /files/search ───────────────────────────────────────────────────────
+// Search text files for a string or regular expression (like a safe grep).
+
+const SearchSchema = z.object({
+  query: z.string().min(1),
+  path: z.string().default("."),
+  regex: z.boolean().default(false),
+  caseSensitive: z.boolean().default(false),
+  maxResults: z.number().int().min(1).max(500).default(100),
+});
+
+const MAX_SEARCH_FILES = 5000;
+
+filesRouter.post("/files/search", (req: Request, res: Response) => {
+  const parsed = SearchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    fail(res, "INVALID_INPUT", parsed.error.issues[0].message);
+    return;
+  }
+
+  const { query, path: userPath, regex, caseSensitive, maxResults } = parsed.data;
+  const access = checkAccess(userPath);
+  if (!access.ok) {
+    fail(res, access.code, access.message, 403);
+    return;
+  }
+  if (!fs.existsSync(access.abs)) {
+    fail(res, "FILE_NOT_FOUND", `Path not found: ${userPath}`, 404);
+    return;
+  }
+
+  let pattern: RegExp;
+  try {
+    const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    pattern = new RegExp(source, caseSensitive ? "" : "i");
+  } catch (err) {
+    fail(res, "INVALID_INPUT", `Invalid regular expression: ${(err as Error).message}`);
+    return;
+  }
+
+  // Collect candidate files (same visibility rules as list_files).
+  const files: string[] = [];
+  const collect = (dir: string) => {
+    if (files.length >= MAX_SEARCH_FILES) return;
+    let items: fs.Dirent[];
+    try {
+      items = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    for (const item of items) {
+      const abs = path.join(dir, item.name);
+      if (isListingIgnored(item.name, abs)) continue;
+      if (item.isDirectory()) collect(abs);
+      else if (item.isFile()) files.push(abs);
+      if (files.length >= MAX_SEARCH_FILES) return;
+    }
+  };
+  if (fs.statSync(access.abs).isDirectory()) collect(access.abs);
+  else files.push(access.abs);
+
+  const matches: { file: string; line: number; text: string }[] = [];
+  let truncated = files.length >= MAX_SEARCH_FILES;
+  outer: for (const file of files) {
+    let buf: Buffer;
+    try {
+      if (fs.statSync(file).size > MAX_READ_BYTES) continue;
+      buf = fs.readFileSync(file);
+    } catch {
+      continue;
+    }
+    if (isBinary(buf)) continue;
+    const lines = buf.toString("utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (pattern.test(lines[i])) {
+        if (matches.length >= maxResults) {
+          truncated = true;
+          break outer;
+        }
+        matches.push({
+          file: path.relative(WORKSPACE_ROOT, file),
+          line: i + 1,
+          text: lines[i].length > 300 ? lines[i].slice(0, 300) + "…" : lines[i],
+        });
+      }
+    }
+  }
+
+  ok(res, { query, matches, filesSearched: files.length, truncated });
 });
 
 // ─── POST /files/delete-soft ──────────────────────────────────────────────────

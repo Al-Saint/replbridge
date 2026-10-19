@@ -1,0 +1,26 @@
+name: Bug report
+description: Something in ReplBridge isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the tool name and the exact error code/message (e.g. `AGENT_BAD_RESPONSE`).
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `npm run doctor`
+      description: Remove your token and URL before pasting.
+      render: text
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      placeholder: Claude Code 2.x / Claude Desktop / other
+  - type: input
+    id: versions
+    attributes:
+      label: ReplBridge version or commit, and Node.js version

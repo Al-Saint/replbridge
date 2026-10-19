@@ -24,7 +24,12 @@ const CWD = process.cwd();
 // packages/cli/dist/commands → packages/mcp-server/dist/index.js
 const MCP_ENTRY = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "..", "mcp-server", "dist", "index.js"
+  "..",
+  "..",
+  "..",
+  "mcp-server",
+  "dist",
+  "index.js"
 );
 const REPLBRIDGE_DIR = path.join(CWD, ".replbridge");
 const CONFIG_PATH = path.join(REPLBRIDGE_DIR, "config.json");
@@ -33,10 +38,7 @@ type Stack = "node" | "python" | "static-html" | "unknown";
 
 function detectStack(): Stack {
   if (fs.existsSync(path.join(CWD, "package.json"))) return "node";
-  if (
-    fs.existsSync(path.join(CWD, "requirements.txt")) ||
-    fs.existsSync(path.join(CWD, "pyproject.toml"))
-  )
+  if (fs.existsSync(path.join(CWD, "requirements.txt")) || fs.existsSync(path.join(CWD, "pyproject.toml")))
     return "python";
   if (fs.existsSync(path.join(CWD, "index.html"))) return "static-html";
   return "unknown";
@@ -114,9 +116,7 @@ export async function runInit(): Promise<void> {
     `REPLBRIDGE_PROJECT_TOKEN=\${REPLBRIDGE_PROJECT_TOKEN}\n` +
     `REPLBRIDGE_WORKSPACE_ROOT=/home/runner/workspace\n`;
 
-  const existingEnvExample = fs.existsSync(envExamplePath)
-    ? fs.readFileSync(envExamplePath, "utf8")
-    : "";
+  const existingEnvExample = fs.existsSync(envExamplePath) ? fs.readFileSync(envExamplePath, "utf8") : "";
 
   if (!existingEnvExample.includes("REPLBRIDGE_PROJECT_TOKEN")) {
     fs.writeFileSync(
@@ -131,9 +131,7 @@ export async function runInit(): Promise<void> {
   const gitignoreAdditions =
     "\n# ReplBridge\n.replbridge/snapshots/\n.replbridge/trash/\n.replbridge/*.local.json\n.env\n";
 
-  const existingGitignore = fs.existsSync(gitignorePath)
-    ? fs.readFileSync(gitignorePath, "utf8")
-    : "";
+  const existingGitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
 
   if (!existingGitignore.includes(".replbridge/snapshots/")) {
     fs.appendFileSync(gitignorePath, gitignoreAdditions, "utf8");
@@ -169,7 +167,7 @@ export async function runInit(): Promise<void> {
   console.log("  STEP 3 — Connect Claude Desktop\n");
   console.log("  Edit ~/Library/Application Support/Claude/claude_desktop_config.json");
   console.log("  (Windows: %APPDATA%\\Claude\\claude_desktop_config.json)\n");
-  console.log("  Add this block inside \"mcpServers\":\n");
+  console.log('  Add this block inside "mcpServers":\n');
 
   const desktopConfig = {
     replbridge: {
@@ -182,10 +180,12 @@ export async function runInit(): Promise<void> {
     },
   };
 
-  console.log(JSON.stringify(desktopConfig, null, 2)
-    .split("\n")
-    .map((l) => "  " + l)
-    .join("\n"));
+  console.log(
+    JSON.stringify(desktopConfig, null, 2)
+      .split("\n")
+      .map((l) => "  " + l)
+      .join("\n")
+  );
 
   console.log("\n  Then build the MCP server (from the repo root):  npm install && npm run build");
   console.log("  and restart Claude Desktop.\n");

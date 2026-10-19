@@ -23,11 +23,12 @@ statusRouter.get("/status", (_req, res) => {
     gitInitialized = true;
 
     try {
-      gitBranch = execSync("git branch --show-current", {
-        cwd: WORKSPACE_ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim() || null;
+      gitBranch =
+        execSync("git branch --show-current", {
+          cwd: WORKSPACE_ROOT,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() || null;
     } catch {
       gitBranch = null;
     }

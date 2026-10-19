@@ -68,10 +68,7 @@ function isInside(root: string, p: string): boolean {
  * NOTE: This is a lexical check only. Routes that touch the filesystem use
  * resolveSafeRealPath() to also guard against symlink escapes.
  */
-export function resolveWorkspacePath(
-  workspaceRoot: string,
-  userPath: string
-): string | null {
+export function resolveWorkspacePath(workspaceRoot: string, userPath: string): string | null {
   const resolved = path.resolve(workspaceRoot, userPath);
   return isInside(workspaceRoot, resolved) ? resolved : null;
 }
@@ -92,10 +89,7 @@ export function resolveWorkspacePath(
  * realpath the nearest existing ancestor so symlinked parent directories are
  * still detected.
  */
-export function resolveSafeRealPath(
-  workspaceRoot: string,
-  userPath: string
-): string | null {
+export function resolveSafeRealPath(workspaceRoot: string, userPath: string): string | null {
   const lexical = resolveWorkspacePath(workspaceRoot, userPath);
   if (lexical === null) return null;
 
@@ -146,9 +140,9 @@ export function isBlockedPath(relPath: string): boolean {
   const abs = path.resolve(WORKSPACE_ROOT, relPath);
   if (AGENT_DIR !== WORKSPACE_ROOT && isInside(AGENT_DIR, abs)) return true;
 
-  return relPath.split(path.sep).some(
-    (segment) => BLOCKED_NAMES.includes(segment) || segment.startsWith(".env")
-  );
+  return relPath
+    .split(path.sep)
+    .some((segment) => BLOCKED_NAMES.includes(segment) || segment.startsWith(".env"));
 }
 
 /**
@@ -174,13 +168,21 @@ export function checkAccess(userPath: string): AccessResult {
   const lexical = resolveWorkspacePath(WORKSPACE_ROOT, userPath);
   const real = resolveSafeRealPath(WORKSPACE_ROOT, userPath);
   if (!lexical || !real) {
-    return { ok: false, code: "PATH_TRAVERSAL", message: "Path escapes the workspace root." };
+    return {
+      ok: false,
+      code: "PATH_TRAVERSAL",
+      message: "Path escapes the workspace root.",
+    };
   }
 
   const relLexical = path.relative(WORKSPACE_ROOT, lexical);
   const relReal = path.relative(WORKSPACE_ROOT, real);
   if (isBlockedPath(relLexical) || isBlockedPath(relReal)) {
-    return { ok: false, code: "BLOCKED_PATH", message: "This path is not accessible." };
+    return {
+      ok: false,
+      code: "BLOCKED_PATH",
+      message: "This path is not accessible.",
+    };
   }
 
   return { ok: true, abs: real, rel: relReal };

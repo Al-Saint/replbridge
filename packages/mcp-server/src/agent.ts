@@ -125,8 +125,41 @@ export class AgentClient {
     return this.request("POST", "/files/write", { path, content });
   }
 
+  async editFile(path: string, oldText: string, newText: string, replaceAll: boolean) {
+    return this.request("POST", "/files/edit", {
+      path,
+      oldText,
+      newText,
+      replaceAll,
+    });
+  }
+
+  async searchFiles(opts: {
+    query: string;
+    path: string;
+    regex: boolean;
+    caseSensitive: boolean;
+    maxResults: number;
+  }) {
+    return this.request<{
+      matches: { file: string; line: number; text: string }[];
+      filesSearched: number;
+      truncated: boolean;
+    }>("POST", "/files/search", opts);
+  }
+
   async softDeleteFile(path: string) {
     return this.request("POST", "/files/delete-soft", { path });
+  }
+
+  // ─── Snapshots ──────────────────────────────────────────────────────────────
+
+  async listSnapshots(path?: string, limit?: number) {
+    return this.request("POST", "/snapshots/list", { path, limit });
+  }
+
+  async restoreSnapshot(path: string, snapshot: string) {
+    return this.request("POST", "/snapshots/restore", { path, snapshot });
   }
 
   // ─── Commands ───────────────────────────────────────────────────────────────

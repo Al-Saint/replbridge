@@ -35,7 +35,12 @@ export function runCommand(
     const start = Date.now();
     const [bin, ...args] = command.trim().split(/\s+/);
 
-    const env: NodeJS.ProcessEnv = { ...process.env, CI: "true", FORCE_COLOR: "0", NO_COLOR: "1" };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CI: "true",
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+    };
     for (const key of SCRUBBED_ENV) delete env[key];
 
     const proc = spawn(bin, args, {
